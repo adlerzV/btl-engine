@@ -55,6 +55,7 @@ final class BTL_Phone_Auth
                 'authToken' => ['type' => 'String'],
                 'refreshToken' => ['type' => 'String'],
                 'isNewUser' => ['type' => 'Boolean'],
+                'requiresProfile' => ['type' => 'Boolean'],
                 'requiresAdminTotp' => ['type' => 'Boolean'],
                 'requiresAdminTotpSetup' => ['type' => 'Boolean'],
                 'pendingTicket' => ['type' => 'String'],
@@ -71,6 +72,17 @@ final class BTL_Phone_Auth
                 $isNewUser = !$existingUserId;
 
                 if ($isNewUser) {
+                    $displayName = trim((string) ($input['displayName'] ?? ''));
+
+                    if ($displayName === '') {
+                        return [
+                            'authToken' => null, 'refreshToken' => null, 'isNewUser' => true,
+                            'requiresProfile' => true,
+                            'requiresAdminTotp' => false, 'requiresAdminTotpSetup' => false,
+                            'pendingTicket' => null,
+                        ];
+                    }
+
                     $userId = self::createUser($phone, $input);
                 } else {
                     $userId = $existingUserId;
@@ -89,6 +101,7 @@ final class BTL_Phone_Auth
                     if (!BTL_Admin_Totp::isConfigured($userId)) {
                         return [
                             'authToken' => null, 'refreshToken' => null, 'isNewUser' => false,
+                            'requiresProfile' => false,
                             'requiresAdminTotp' => false, 'requiresAdminTotpSetup' => true,
                             'pendingTicket' => $ticket,
                         ];
@@ -96,6 +109,7 @@ final class BTL_Phone_Auth
 
                     return [
                         'authToken' => null, 'refreshToken' => null, 'isNewUser' => false,
+                        'requiresProfile' => false,
                         'requiresAdminTotp' => true, 'requiresAdminTotpSetup' => false,
                         'pendingTicket' => $ticket,
                     ];
@@ -107,6 +121,7 @@ final class BTL_Phone_Auth
                     'authToken' => $tokens['authToken'],
                     'refreshToken' => $tokens['refreshToken'],
                     'isNewUser' => $isNewUser,
+                    'requiresProfile' => false,
                     'requiresAdminTotp' => false,
                     'requiresAdminTotpSetup' => false,
                     'pendingTicket' => null,
