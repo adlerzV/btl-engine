@@ -2,7 +2,7 @@
 
 /**
  * Plugin Name: BTL Engine
- * Version: 1.0.0
+ * Version: 1.0.2
  */
 
 defined('ABSPATH') || exit;
@@ -14,4 +14,5 @@ register_activation_hook(__FILE__, function () {
     BTL_Notifications::install();
     BTL_Sessions::install();
     BTL_Ticket_Replies::install();
+    BTL_Otp::install();
 });
