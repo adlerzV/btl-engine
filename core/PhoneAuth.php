@@ -65,7 +65,7 @@ final class BTL_Phone_Auth
                     throw new GraphQL\Error\UserError('شماره موبایل نامعتبر است.');
                 }
 
-                BTL_Otp::verify($phone, self::PURPOSE, sanitize_text_field($input['code']));
+                $otpRowId = BTL_Otp::validate($phone, self::PURPOSE, sanitize_text_field($input['code']));
 
                 $existingUserId = self::findUserByPhone($phone);
                 $isNewUser = !$existingUserId;
@@ -75,6 +75,8 @@ final class BTL_Phone_Auth
                 } else {
                     $userId = $existingUserId;
                 }
+
+                BTL_Otp::consume($otpRowId);
 
                 $user = get_userdata($userId);
                 if (!$user) {
@@ -105,6 +107,61 @@ final class BTL_Phone_Auth
                     'authToken' => $tokens['authToken'],
                     'refreshToken' => $tokens['refreshToken'],
                     'isNewUser' => $isNewUser,
+                    'requiresAdminTotp' => false,
+                    'requiresAdminTotpSetup' => false,
+                    'pendingTicket' => null,
+                ];
+            },
+        ]);
+
+        register_graphql_mutation('loginWithPhonePassword', [
+            'inputFields' => [
+                'phone' => ['type' => ['non_null' => 'String']],
+                'password' => ['type' => ['non_null' => 'String']],
+            ],
+            'outputFields' => [
+                'authToken' => ['type' => 'String'],
+                'refreshToken' => ['type' => 'String'],
+                'requiresAdminTotp' => ['type' => 'Boolean'],
+                'requiresAdminTotpSetup' => ['type' => 'Boolean'],
+                'pendingTicket' => ['type' => 'String'],
+            ],
+            'mutateAndGetPayload' => function ($input) {
+                $phone = self::normalizePhone($input['phone']);
+                if (!$phone) {
+                    throw new GraphQL\Error\UserError('شماره موبایل نامعتبر است.');
+                }
+
+                $userId = self::findUserByPhone($phone);
+                $user = $userId ? get_userdata($userId) : null;
+
+                if (!$user || !wp_check_password($input['password'], $user->user_pass, $userId)) {
+                    throw new GraphQL\Error\UserError('شماره موبایل یا رمز عبور اشتباه است.');
+                }
+
+                if (user_can($userId, 'manage_woocommerce')) {
+                    $ticket = BTL_Admin_Totp::issuePendingTicket($userId);
+
+                    if (!BTL_Admin_Totp::isConfigured($userId)) {
+                        return [
+                            'authToken' => null, 'refreshToken' => null,
+                            'requiresAdminTotp' => false, 'requiresAdminTotpSetup' => true,
+                            'pendingTicket' => $ticket,
+                        ];
+                    }
+
+                    return [
+                        'authToken' => null, 'refreshToken' => null,
+                        'requiresAdminTotp' => true, 'requiresAdminTotpSetup' => false,
+                        'pendingTicket' => $ticket,
+                    ];
+                }
+
+                $tokens = self::issueTokens($user);
+
+                return [
+                    'authToken' => $tokens['authToken'],
+                    'refreshToken' => $tokens['refreshToken'],
                     'requiresAdminTotp' => false,
                     'requiresAdminTotpSetup' => false,
                     'pendingTicket' => null,

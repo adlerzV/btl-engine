@@ -100,8 +100,7 @@ final class BTL_Otp
             throw new GraphQL\Error\UserError('ارسال کد با خطا مواجه شد. دوباره تلاش کنید.');
         }
     }
-
-    public static function verify(string $identifier, string $purpose, string $code): void
+    public static function validate(string $identifier, string $purpose, string $code): int
     {
         global $wpdb;
         $table = self::table();
@@ -124,6 +123,18 @@ final class BTL_Otp
             throw new GraphQL\Error\UserError('کد وارد شده صحیح نیست.');
         }
 
-        $wpdb->update($table, ['consumed_at' => current_time('mysql', true)], ['id' => $row->id]);
+        return (int) $row->id;
+    }
+
+    public static function consume(int $rowId): void
+    {
+        global $wpdb;
+        $wpdb->update(self::table(), ['consumed_at' => current_time('mysql', true)], ['id' => $rowId]);
+    }
+
+    public static function verify(string $identifier, string $purpose, string $code): void
+    {
+        $rowId = self::validate($identifier, $purpose, $code);
+        self::consume($rowId);
     }
 }
