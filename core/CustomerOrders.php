@@ -74,7 +74,41 @@ final class BTL_Customer_Orders
                         continue;
                     }
 
-                    $itemId = $order->add_product($product, $quantity);
+                    $deliveryMethod = '';
+                    foreach (($li['metaData'] ?? []) as $meta) {
+                        if (($meta['key'] ?? '') === 'روش تحویل') {
+                            $deliveryMethod = sanitize_text_field($meta['value'] ?? '');
+                            break;
+                        }
+                    }
+
+                    if ($deliveryMethod === 'code') {
+                        $available = BTL_CdKey_Stock::availableCount($productId, $variationId);
+                        if ($available < $quantity) {
+                            $order->delete(true);
+                            throw new GraphQL\Error\UserError(sprintf(
+                                'موجودی کد سی‌دی‌کی «%s» کافی نیست. لطفاً تعداد را کاهش دهید یا روش تحویل دیگری انتخاب کنید.',
+                                $product->get_name()
+                            ));
+                        }
+                    }
+
+                    $unitPrice = BTL_Price_Engine::resolveDeliveryPrice($product, $deliveryMethod);
+                    if ($unitPrice === null) {
+                        $order->delete(true);
+                        throw new GraphQL\Error\UserError(sprintf(
+                            'روش تحویل انتخاب‌شده برای «%s» در حال حاضر در دسترس نیست.',
+                            $product->get_name()
+                        ));
+                    }
+
+                    $lineTotal = (string) round($unitPrice * $quantity);
+
+                    $itemId = $order->add_product($product, $quantity, [
+                        'subtotal' => $lineTotal,
+                        'total' => $lineTotal,
+                    ]);
+
                     if (!$itemId) {
                         continue;
                     }

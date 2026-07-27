@@ -188,7 +188,7 @@ final class BTL_Price_Engine
                 );
 
             if (
-                $candidate <
+                $candidate 
                 $regular_price
             ) {
                 $from =
@@ -495,6 +495,36 @@ final class BTL_Price_Engine
         );
 
         return true;
+    }
+
+    public static function resolveDeliveryPrice(WC_Product $product, string $deliveryMethod): ?float
+    {
+        if ($deliveryMethod === 'gift') {
+            return self::readTomanMeta($product, '_gift_price_toman', 'giftPriceToman');
+        }
+
+        if ($deliveryMethod === 'code') {
+            return self::readTomanMeta($product, '_code_price_toman', 'codePriceToman');
+        }
+
+        $price = $product->get_price();
+        if ($price === '' || $price === null) {
+            return null;
+        }
+
+        return (float)$price;
+    }
+
+    private static function readTomanMeta(WC_Product $product, string $manualKey, string $autoKey): ?float
+    {
+        $manual = $product->get_meta($manualKey);
+        $value = $manual !== '' ? $manual : $product->get_meta($autoKey);
+
+        if ($value === '' || $value === false || $value === 'disabled') {
+            return null;
+        }
+
+        return self::money($value);
     }
 
     public static function rates(): array
