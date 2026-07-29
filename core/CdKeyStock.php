@@ -1,10 +1,12 @@
 <?php
+// core/CdKeyStock.php
 defined('ABSPATH') || exit;
 
 final class BTL_CdKey_Stock
 {
     private const READY_OPTION = 'btl_cdkey_stock_table_ready';
     private const AUTO_ASSIGN_STATUSES = ['processing', 'completed'];
+    private const BACKFILL_LIMIT = 200;
 
     public static function table(): string
     {
@@ -67,6 +69,11 @@ final class BTL_CdKey_Stock
             self::add($productId, $variationId, $key, $staffUserId);
             $count++;
         }
+
+        if ($count > 0) {
+            self::backfillPendingOrders($productId, $variationId);
+        }
+
         return $count;
     }
 
@@ -153,7 +160,7 @@ final class BTL_CdKey_Stock
                 );
 
                 $order->add_order_note(sprintf(
-                    '⚠️ موجودی کد سی‌دی‌کی کافی نیست — آیتم #%d: %d از %d کد تخصیص یافت. لطفاً از بخش ویرایش سفارش، کد(های) باقی‌مانده را دستی وارد کنید.',
+                    '⚠️ موجودی کد سی‌دی‌کی کافی نیست — آیتم #%d: %d از %d کد تخصیص یافت. با افزودن موجودی جدید این سفارش خودکار تکمیل می‌شود.',
                     $itemId,
                     $totalAssigned,
                     $needed
@@ -162,6 +169,75 @@ final class BTL_CdKey_Stock
                 self::notify_staff_low_stock($orderId, $itemId, $item->get_name(), $totalAssigned, $needed);
 
                 break;
+            }
+        }
+    }
+
+    public static function backfillPendingOrders(int $productId, int $variationId): void
+    {
+        global $wpdb;
+
+        $itemIds = $wpdb->get_col($wpdb->prepare(
+            "SELECT DISTINCT oi.order_item_id
+             FROM {$wpdb->prefix}woocommerce_order_items oi
+             INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta oim_pid ON oim_pid.order_item_id = oi.order_item_id AND oim_pid.meta_key = '_product_id' AND oim_pid.meta_value = %d
+             INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta oim_vid ON oim_vid.order_item_id = oi.order_item_id AND oim_vid.meta_key = '_variation_id' AND oim_vid.meta_value = %d
+             INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta oim_delivery ON oim_delivery.order_item_id = oi.order_item_id AND oim_delivery.meta_key = 'روش تحویل' AND oim_delivery.meta_value = 'code'
+             INNER JOIN {$wpdb->posts} p ON p.ID = oi.order_id
+             WHERE p.post_status IN ('wc-processing', 'wc-completed')
+             ORDER BY oi.order_item_id ASC
+             LIMIT %d",
+            $productId,
+            $variationId,
+            self::BACKFILL_LIMIT
+        ));
+
+        if (!$itemIds) {
+            return;
+        }
+
+        foreach ($itemIds as $rawItemId) {
+            $itemId = (int)$rawItemId;
+            $orderItem = WC_Order_Factory::get_order_item($itemId);
+            if (!$orderItem) continue;
+
+            $orderId = (int)$orderItem->get_order_id();
+            $needed = max(1, (int)$orderItem->get_quantity());
+            $already = BTL_Secure_Fields::countByOrderItem($orderId, $itemId, 'cdkey');
+            $remaining = $needed - $already;
+
+            if ($remaining <= 0) continue;
+
+            $filledNow = 0;
+            for ($i = 0; $i < $remaining; $i++) {
+                if (!self::assignNext($productId, $variationId, $orderId, $itemId)) {
+                    break;
+                }
+                $filledNow++;
+            }
+
+            if ($filledNow === 0) {
+                continue;
+            }
+
+            $nowAssigned = $already + $filledNow;
+            $order = wc_get_order($orderId);
+
+            if ($nowAssigned >= $needed) {
+                if ($order) {
+                    $order->add_order_note('✅ کد سی‌دی‌کی به‌صورت خودکار پس از افزودن موجودی جدید تخصیص یافت.');
+                }
+
+                $customerId = $order ? (int)$order->get_customer_id() : 0;
+                if ($customerId) {
+                    BTL_Notifications::push(
+                        $customerId,
+                        'کد سفارش شما آماده شد ✅',
+                        'کد سی‌دی‌کی سفارش شما تخصیص یافت و اکنون در پیشخوان قابل مشاهده است.',
+                        '/my-account/orders',
+                        'order'
+                    );
+                }
             }
         }
     }

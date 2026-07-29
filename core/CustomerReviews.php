@@ -1,4 +1,5 @@
 <?php
+// core/CustomerReviews.php
 defined('ABSPATH') || exit;
 
 final class BTL_Customer_Reviews
@@ -107,15 +108,23 @@ final class BTL_Customer_Reviews
                 $hasNextPage = count($comments) > $first;
                 $comments = array_slice($comments, 0, $first);
 
-                $nodes = array_map(static function ($comment) {
-                    $product = wc_get_product((int)$comment->comment_post_ID);
+                $commentIds = array_map(static fn($c) => (int)$c->comment_ID, $comments);
 
-                    $replyComments = get_comments([
-                        'parent' => $comment->comment_ID,
-                        'status' => 'approve',
-                        'orderby' => 'comment_date',
-                        'order' => 'ASC',
-                    ]);
+                $allReplies = !empty($commentIds) ? get_comments([
+                    'parent__in' => $commentIds,
+                    'status' => 'approve',
+                    'orderby' => 'comment_date',
+                    'order' => 'ASC',
+                ]) : [];
+
+                $repliesByParent = [];
+                foreach ($allReplies as $reply) {
+                    $repliesByParent[(int)$reply->comment_parent][] = $reply;
+                }
+
+                $nodes = array_map(static function ($comment) use ($repliesByParent) {
+                    $product = wc_get_product((int)$comment->comment_post_ID);
+                    $replyComments = $repliesByParent[(int)$comment->comment_ID] ?? [];
 
                     return [
                         'databaseId' => (int)$comment->comment_ID,

@@ -1,5 +1,5 @@
 <?php
-
+// core/bootstrap.php
 defined('ABSPATH') || exit;
 
 require_once __DIR__ . '/Helpers.php';
@@ -34,6 +34,7 @@ require_once __DIR__ . '/Otp.php';
 require_once __DIR__ . '/SmsGateway.php';
 require_once __DIR__ . '/AdminTotp.php';
 require_once __DIR__ . '/PhoneAuth.php';
+require_once __DIR__ . '/AdminLogin.php';
 
 BTL_Price_Engine::boot();
 BTL_Rate_Sync::boot();
@@ -62,3 +63,4 @@ BTL_Customer_Orders::boot();
 BTL_Otp::boot();
 BTL_Admin_Totp::boot();
 BTL_Phone_Auth::boot();
+BTL_Admin_Login::boot();
