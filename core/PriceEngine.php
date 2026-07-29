@@ -188,15 +188,9 @@ final class BTL_Price_Engine
                 );
 
             if (
-                $candidate 
-                $regular_price
+                $candidate < $regular_price
             ) {
                 $from =
-                    (int)$variation->get_meta(
-                        'foreign_sale_price_dates_from'
-                    );
-
-                $to =
                     (int)$variation->get_meta(
                         'foreign_sale_price_dates_to'
                     );
