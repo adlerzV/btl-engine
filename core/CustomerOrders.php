@@ -75,10 +75,24 @@ final class BTL_Customer_Orders
                     }
 
                     $deliveryMethod = '';
+                    $requestedRegion = '';
                     foreach (($li['metaData'] ?? []) as $meta) {
                         if (($meta['key'] ?? '') === 'روش تحویل') {
                             $deliveryMethod = sanitize_text_field($meta['value'] ?? '');
-                            break;
+                        }
+                        if (($meta['key'] ?? '') === 'ریجن') {
+                            $requestedRegion = sanitize_text_field($meta['value'] ?? '');
+                        }
+                    }
+
+                    if ($requestedRegion !== '') {
+                        $actualRegion = self::variationRegionValue($product);
+                        if ($actualRegion !== null && mb_strtolower(trim($actualRegion)) !== mb_strtolower(trim($requestedRegion))) {
+                            $order->delete(true);
+                            throw new GraphQL\Error\UserError(sprintf(
+                                'محصول «%s» برای ریجن انتخاب‌شده در دسترس نیست.',
+                                $product->get_name()
+                            ));
                         }
                     }
 
@@ -154,5 +168,21 @@ final class BTL_Customer_Orders
                 ];
             },
         ]);
+    }
+
+    private static function variationRegionValue(WC_Product $product): ?string
+    {
+        if (!$product->is_type('variation')) {
+            return null;
+        }
+
+        foreach ($product->get_variation_attributes() as $key => $value) {
+            $taxonomy = str_replace('attribute_', '', $key);
+            if (strpos(strtolower($taxonomy), 'region') !== false || strpos($taxonomy, 'ریجن') !== false) {
+                return (string) $value;
+            }
+        }
+
+        return null;
     }
 }

@@ -145,21 +145,45 @@ final class BTL_CdKey_Stock
                     continue;
                 }
 
+                $totalAssigned = $already + $assignedThisRun;
+
                 BTL_Helpers::logger(
                     "CdKeyStock: insufficient stock for product {$productId} variation {$variationId} " .
-                    "(order {$orderId}, item {$itemId}) — assigned " . ($already + $assignedThisRun) . " of {$needed} needed"
+                    "(order {$orderId}, item {$itemId}) — assigned {$totalAssigned} of {$needed} needed"
                 );
 
                 $order->add_order_note(sprintf(
                     '⚠️ موجودی کد سی‌دی‌کی کافی نیست — آیتم #%d: %d از %d کد تخصیص یافت. لطفاً از بخش ویرایش سفارش، کد(های) باقی‌مانده را دستی وارد کنید.',
                     $itemId,
-                    $already + $assignedThisRun,
+                    $totalAssigned,
                     $needed
                 ));
+
+                self::notify_staff_low_stock($orderId, $itemId, $item->get_name(), $totalAssigned, $needed);
 
                 break;
             }
         }
+    }
+
+    private static function notify_staff_low_stock(int $orderId, int $itemId, string $productName, int $assigned, int $needed): void
+    {
+        $editUrl = admin_url('post.php?post=' . $orderId . '&action=edit');
+
+        foreach (self::staffUserIds() as $staffId) {
+            BTL_Notifications::push(
+                (int)$staffId,
+                'کمبود موجودی کد سی‌دی‌کی ⚠️',
+                sprintf('سفارش #%d — «%s»: فقط %d از %d کد موجود بود.', $orderId, $productName, $assigned, $needed),
+                $editUrl,
+                'order'
+            );
+        }
+    }
+
+    private static function staffUserIds(): array
+    {
+        return get_users(['capability' => 'manage_woocommerce', 'fields' => 'ID']);
     }
 
     public static function register(): void

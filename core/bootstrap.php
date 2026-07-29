@@ -5,6 +5,8 @@ defined('ABSPATH') || exit;
 require_once __DIR__ . '/Helpers.php';
 require_once __DIR__ . '/Cache.php';
 require_once __DIR__ . '/PriceEngine.php';
+require_once __DIR__ . '/RateGateway.php';
+require_once __DIR__ . '/RateSync.php';
 require_once __DIR__ . '/GraphQL.php';
 require_once __DIR__ . '/Scheduler.php';
 require_once __DIR__ . '/Revalidator.php';
@@ -34,6 +36,7 @@ require_once __DIR__ . '/AdminTotp.php';
 require_once __DIR__ . '/PhoneAuth.php';
 
 BTL_Price_Engine::boot();
+BTL_Rate_Sync::boot();
 BTL_GraphQL::boot();
 BTL_Scheduler::boot();
 BTL_Revalidator::boot();

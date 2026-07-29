@@ -118,6 +118,7 @@ final class BTL_GraphQL
             'eu' => ['eu', 'eu-global', 'اروپا', 'europe'],
             'us' => ['us', 'امریکا', 'آمریکا', 'america', 'usa'],
             'tr' => ['tr', 'ترکیه', 'turkey'],
+            'ua' => ['ua', 'اوکراین', 'ukraine'],
         ];
 
         $slug = strtolower(trim($regionSlug));
@@ -610,7 +611,8 @@ final class BTL_GraphQL
                 $itemId = (int)$input['itemId'];
                 $fieldType = sanitize_text_field($input['fieldType']);
 
-                if ($fieldType !== 'cdkey') {
+                $allowedFields = ['cdkey', 'email', 'password', 'battletag'];
+                if (!in_array($fieldType, $allowedFields, true)) {
                     throw new GraphQL\Error\UserError('این نوع فیلد از این مسیر قابل دسترسی نیست.');
                 }
 
@@ -634,14 +636,23 @@ final class BTL_GraphQL
                     throw new GraphQL\Error\UserError('آیتم نامعتبر است.');
                 }
 
-                // به تعداد quantity این آیتم، تمام کدهای تخصیص‌یافته را برمی‌گرداند — نه فقط یکی
-                $values = BTL_Secure_Fields::revealAllForCustomerCdKey($orderId, $itemId, $currentUserId);
+                if ($fieldType === 'cdkey') {
+                    $values = BTL_Secure_Fields::revealAllForCustomerCdKey($orderId, $itemId, $currentUserId);
 
-                if (empty($values)) {
-                    throw new GraphQL\Error\UserError('کد هنوز آماده نشده است، کمی بعد دوباره تلاش کنید.');
+                    if (empty($values)) {
+                        throw new GraphQL\Error\UserError('کد هنوز آماده نشده است، کمی بعد دوباره تلاش کنید.');
+                    }
+
+                    return ['values' => $values];
                 }
 
-                return ['values' => $values];
+                $value = BTL_Secure_Fields::revealForStaff($orderId, $itemId, $fieldType, $currentUserId);
+
+                if ($value === null) {
+                    throw new GraphQL\Error\UserError('اطلاعاتی یافت نشد (ممکن است سفارش تکمیل شده و اطلاعات پاک شده باشد).');
+                }
+
+                return ['values' => [$value]];
             },
         ]);
     }
