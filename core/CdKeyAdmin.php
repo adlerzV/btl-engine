@@ -14,8 +14,8 @@ final class BTL_CdKey_Admin
     {
         if (!current_user_can('manage_woocommerce')) return;
 
-        $variationId = $variation->ID;
-        $productId = $variation->post_parent;
+        $variationId = $variation->get_id();
+        $productId = $variation->get_parent_id();
         $count = BTL_CdKey_Stock::availableCount($productId, $variationId);
         $nonce = wp_create_nonce('btl_cdkey_stock_' . $variationId);
 

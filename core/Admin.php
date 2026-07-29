@@ -35,7 +35,7 @@ final class BTL_Admin
 
             'value' =>
                 get_post_meta(
-                    $variation->ID,
+                    $variation->get_id(),
                     '_gift_price_toman',
                     true
                 ),
@@ -53,7 +53,7 @@ final class BTL_Admin
 
             'value' =>
                 get_post_meta(
-                    $variation->ID,
+                    $variation->get_id(),
                     '_code_price_toman',
                     true
                 ),
