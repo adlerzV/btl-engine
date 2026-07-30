@@ -192,6 +192,11 @@ final class BTL_Price_Engine
             ) {
                 $from =
                     (int)$variation->get_meta(
+                        'foreign_sale_price_dates_from'
+                    );
+
+                $to =
+                    (int)$variation->get_meta(
                         'foreign_sale_price_dates_to'
                     );
 
