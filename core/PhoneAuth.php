@@ -17,7 +17,6 @@ final class BTL_Phone_Auth
         register_graphql_mutation('requestPhoneOtp', [
             'inputFields' => [
                 'phone' => ['type' => ['non_null' => 'String']],
-                'turnstileToken' => ['type' => ['non_null' => 'String']],
             ],
             'outputFields' => [
                 'success' => ['type' => 'Boolean'],
@@ -27,10 +26,6 @@ final class BTL_Phone_Auth
                 $phone = self::normalizePhone($input['phone']);
                 if (!$phone) {
                     throw new GraphQL\Error\UserError('شماره موبایل نامعتبر است.');
-                }
-
-                if (!self::verifyTurnstile($input['turnstileToken'])) {
-                    throw new GraphQL\Error\UserError('تأیید امنیتی ناموفق بود. صفحه را رفرش کنید.');
                 }
 
                 $ip = self::clientIp();
@@ -268,27 +263,5 @@ final class BTL_Phone_Auth
             return trim($parts[0]);
         }
         return sanitize_text_field($_SERVER['REMOTE_ADDR'] ?? '');
-    }
-
-    private static function verifyTurnstile(string $token): bool
-    {
-        if (!defined('TURNSTILE_SECRET_KEY') || TURNSTILE_SECRET_KEY === '') {
-            BTL_Helpers::logger('Turnstile: TURNSTILE_SECRET_KEY تعریف نشده — بررسی امنیتی موقتاً غیرفعال است (فقط مناسب محیط توسعه، برای پروداکشن باید تنظیم شود).');
-            return true;
-        }
-
-        $response = wp_remote_post('https://challenges.cloudflare.com/turnstile/v0/siteverify', [
-            'timeout' => 8,
-            'body' => [
-                'secret' => TURNSTILE_SECRET_KEY,
-                'response' => $token,
-                'remoteip' => self::clientIp(),
-            ],
-        ]);
-
-        if (is_wp_error($response)) return false;
-
-        $body = json_decode(wp_remote_retrieve_body($response), true);
-        return !empty($body['success']);
     }
 }
