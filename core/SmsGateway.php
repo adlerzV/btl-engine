@@ -28,21 +28,21 @@ final class BTL_NirSms_Gateway implements BTL_Sms_Gateway
 
         $payload = [
             'sending_type' => 'pattern',
-            'from_number' => NIRSMS_FROM_NUMBER,
-            'code' => NIRSMS_PATTERN_CODE,
-            'recipients' => [$this->toInternational($phone)],
-            'params' => [
-                'code' => $code,
+            'from_number'  => NIRSMS_FROM_NUMBER,
+            'code'         => NIRSMS_PATTERN_CODE,
+            'recipients'   => [$this->toInternational($phone)],
+            'params'       => [
+                'zrvwigtmnchrsco' => $code, 
             ],
         ];
 
         $response = wp_remote_post(self::BASE_URL, [
             'timeout' => 10,
             'headers' => [
-                'Content-Type' => 'application/json',
+                'Content-Type'  => 'application/json',
                 'Authorization' => NIRSMS_API_KEY,
             ],
-            'body' => wp_json_encode($payload, JSON_UNESCAPED_UNICODE),
+            'body'    => wp_json_encode($payload, JSON_UNESCAPED_UNICODE),
         ]);
 
         if (is_wp_error($response)) {
@@ -50,9 +50,18 @@ final class BTL_NirSms_Gateway implements BTL_Sms_Gateway
             return false;
         }
 
-        $status = wp_remote_retrieve_response_code($response);
-        if ($status < 200 || $status >= 300) {
-            BTL_Helpers::logger('NirSMS HTTP error: ' . $status . ' — ' . wp_remote_retrieve_body($response));
+        $status_code = wp_remote_retrieve_response_code($response);
+        $body        = wp_remote_retrieve_body($response);
+        $data        = json_decode($body, true);
+
+        if ($status_code !== 200) {
+            BTL_Helpers::logger('NirSMS HTTP error: ' . $status_code . ' — ' . $body);
+            return false;
+        }
+
+        if (!isset($data['meta']['status']) || $data['meta']['status'] !== true) {
+            $msg = $data['meta']['message'] ?? 'ناشناخته';
+            BTL_Helpers::logger('NirSMS API Error: ' . $msg);
             return false;
         }
 
@@ -61,6 +70,12 @@ final class BTL_NirSms_Gateway implements BTL_Sms_Gateway
 
     private function toInternational(string $phone): string
     {
-        return '98' . substr($phone, 1);
+        $clean = preg_replace('/\D/', '', $phone);
+
+        if (str_starts_with($clean, '0')) {
+            $clean = '98' . substr($clean, 1);
+        }
+
+        return '+' . $clean;
     }
 }
