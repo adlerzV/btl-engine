@@ -10,6 +10,7 @@ interface BTL_Sms_Gateway
 final class BTL_NirSms_Gateway implements BTL_Sms_Gateway
 {
     private const BASE_URL = 'https://edge.ippanel.com/v1/api/send';
+    private const DEFAULT_PATTERN_VAR_KEY = 'code';
 
     public function sendOtp(string $phone, string $code): bool
     {
@@ -26,18 +27,22 @@ final class BTL_NirSms_Gateway implements BTL_Sms_Gateway
             return false;
         }
 
+        $varKey = (defined('NIRSMS_PATTERN_VAR_KEY') && NIRSMS_PATTERN_VAR_KEY !== '')
+            ? NIRSMS_PATTERN_VAR_KEY
+            : self::DEFAULT_PATTERN_VAR_KEY;
+
         $payload = [
             'sending_type' => 'pattern',
-            'from_number'  => NIRSMS_FROM_NUMBER,
+            'from_number'  => $this->toInternational(NIRSMS_FROM_NUMBER),
             'code'         => NIRSMS_PATTERN_CODE,
             'recipients'   => [$this->toInternational($phone)],
             'params'       => [
-                'zrvwigtmnchrsco' => $code, 
+                $varKey => $code,
             ],
         ];
 
         $response = wp_remote_post(self::BASE_URL, [
-            'timeout' => 10,
+            'timeout' => 20,
             'headers' => [
                 'Content-Type'  => 'application/json',
                 'Authorization' => NIRSMS_API_KEY,

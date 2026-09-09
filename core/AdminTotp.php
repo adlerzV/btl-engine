@@ -31,6 +31,18 @@ final class BTL_Admin_Totp
         return !empty($secret);
     }
 
+    public static function resolvePendingUserId(string $ticket): int
+    {
+        return self::resolveTicket($ticket);
+    }
+
+    public static function clearPendingTicket(string $ticket): void
+    {
+        delete_transient(self::TICKET_PREFIX . $ticket);
+        delete_transient(self::SETUP_PREFIX . $ticket);
+        self::clearAttempts($ticket);
+    }
+
     private static function resolveTicket(string $ticket): int
     {
         $userId = get_transient(self::TICKET_PREFIX . $ticket);
