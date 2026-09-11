@@ -137,9 +137,23 @@ final class BTL_Phone_Auth
         }
 
         try {
+            // ست کردن کاربر جاری برای رفع محدودیت امنیتی WPGraphQL JWT
+            wp_set_current_user($user->ID);
+
+            $authToken = \WPGraphQL\JWT_Authentication\Auth::get_token($user);
+            $refreshToken = \WPGraphQL\JWT_Authentication\Auth::get_refresh_token($user);
+
+            if (is_wp_error($authToken)) {
+                throw new RuntimeException($authToken->get_error_message());
+            }
+
+            if (is_wp_error($refreshToken)) {
+                throw new RuntimeException($refreshToken->get_error_message());
+            }
+
             return [
-                'authToken' => \WPGraphQL\JWT_Authentication\Auth::get_token($user),
-                'refreshToken' => \WPGraphQL\JWT_Authentication\Auth::get_refresh_token($user),
+                'authToken'    => (string) $authToken,
+                'refreshToken' => (string) $refreshToken,
             ];
         } catch (Throwable $e) {
             BTL_Helpers::logger('issueTokens fatal: ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
