@@ -109,7 +109,7 @@ final class BTL_GraphQL
             ));
 
             return array_values(array_map('intval', array_diff($restrictedIds, $matchingIds)));
-        }, 'btl_regions', 15 * MINUTE_IN_SECONDS);
+        }, 'btl_regions', DAY_IN_SECONDS);
     }
 
     private static function region_aliases(string $regionSlug): array

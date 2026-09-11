@@ -42,7 +42,7 @@ final class BTL_NirSms_Gateway implements BTL_Sms_Gateway
         ];
 
         $response = wp_remote_post(self::BASE_URL, [
-            'timeout' => 20,
+            'timeout' => 8,
             'headers' => [
                 'Content-Type'  => 'application/json',
                 'Authorization' => NIRSMS_API_KEY,

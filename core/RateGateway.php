@@ -27,7 +27,7 @@ final class BTL_Navasan_Rate_Gateway implements BTL_Rate_Gateway
 
         $response = wp_remote_get(
             self::BASE_URL . '?api_key=' . rawurlencode(NAVASAN_API_KEY),
-            ['timeout' => 12]
+            ['timeout' => 6]
         );
 
         if (is_wp_error($response)) {

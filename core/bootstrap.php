@@ -6,6 +6,7 @@ require_once __DIR__ . '/Cache.php';
 require_once __DIR__ . '/PriceEngine.php';
 require_once __DIR__ . '/RateGateway.php';
 require_once __DIR__ . '/RateSync.php';
+require_once __DIR__ . '/RegionTaxonomy.php';
 require_once __DIR__ . '/GraphQL.php';
 require_once __DIR__ . '/Scheduler.php';
 require_once __DIR__ . '/Revalidator.php';
@@ -40,6 +41,7 @@ require_once __DIR__ . '/AdminLogin.php';
 require_once __DIR__ . '/CredentialsAuth.php';
 require_once __DIR__ . '/PasswordReset.php';
 
+BTL_Region_Taxonomy::boot();
 BTL_Price_Engine::boot();
 BTL_Rate_Sync::boot();
 BTL_GraphQL::boot();
