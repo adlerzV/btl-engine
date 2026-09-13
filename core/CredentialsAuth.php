@@ -2,9 +2,12 @@
 
 defined('ABSPATH') || exit;
 
+use GraphQL\Error\UserError;
+
 final class BTL_Credentials_Auth
 {
     private const MANUAL_PASSWORD_META = 'btl_has_manual_password';
+    private const DUMMY_HASH = '$P$Bnothinghere.nothinghere.nothing0';
 
     public static function boot(): void
     {
@@ -17,10 +20,15 @@ final class BTL_Credentials_Auth
             'type' => 'Boolean',
             'resolve' => static function ($user) {
                 $currentUserId = get_current_user_id();
-                if (!$currentUserId || $currentUserId !== (int) $user->databaseId) {
+                if (!$currentUserId) {
                     return null;
                 }
-                return (bool) get_user_meta($currentUserId, self::MANUAL_PASSWORD_META, true);
+
+                if ($currentUserId !== (int) $user->databaseId && !current_user_can('manage_options')) {
+                    return null;
+                }
+
+                return (bool) get_user_meta((int) $user->databaseId, self::MANUAL_PASSWORD_META, true);
             },
         ]);
 
@@ -37,58 +45,61 @@ final class BTL_Credentials_Auth
                 'pendingTicket' => ['type' => 'String'],
             ],
             'mutateAndGetPayload' => function ($input) {
-                $rawIdentifier = trim((string) $input['identifier']);
-                if ($rawIdentifier === '') {
-                    throw new GraphQL\Error\UserError('شماره موبایل یا ایمیل را وارد کنید.');
-                }
+                return self::safeExecute(function () use ($input) {
+                    $rawIdentifier = trim((string) $input['identifier']);
+                    $password = (string) $input['password'];
 
-                $throttleKey = mb_strtolower($rawIdentifier);
-                $ip = BTL_Helpers::clientIp();
-                BTL_Login_Throttle::assertAllowed($throttleKey, $ip);
+                    if ($rawIdentifier === '') {
+                        throw new UserError('شماره موبایل یا ایمیل را وارد کنید.');
+                    }
 
-                $user = self::findUserByIdentifier($rawIdentifier);
-                $isValid = false;
+                    if ($password === '') {
+                        throw new UserError('رمز عبور را وارد کنید.');
+                    }
 
-                if ($user) {
-                    $isValid = wp_check_password((string) $input['password'], $user->user_pass, $user->ID);
-                } else {
-                    wp_check_password((string) $input['password'], '$P$Bnothinghere.nothinghere.nothing0', 0);
-                }
+                    $throttleKey = mb_strtolower($rawIdentifier);
+                    $ip = BTL_Helpers::clientIp();
+                    BTL_Login_Throttle::assertAllowed($throttleKey, $ip);
 
-                if (!$user || !$isValid) {
-                    BTL_Login_Throttle::recordAttempt($throttleKey, $ip);
-                    throw new GraphQL\Error\UserError('شماره موبایل/ایمیل یا رمز عبور اشتباه است.');
-                }
+                    $user = self::findUserByIdentifier($rawIdentifier);
+                    $isValid = false;
 
-                BTL_Login_Throttle::clearAttempts($throttleKey);
+                    if ($user instanceof WP_User) {
+                        $isValid = wp_check_password($password, $user->user_pass, $user->ID);
+                    } else {
+                        wp_check_password($password, self::DUMMY_HASH, 0);
+                    }
 
-                if (user_can($user->ID, 'manage_woocommerce')) {
-                    $ticket = BTL_Admin_Totp::issuePendingTicket($user->ID);
+                    if (!$user || !$isValid) {
+                        BTL_Login_Throttle::recordAttempt($throttleKey, $ip);
+                        throw new UserError('شماره موبایل/ایمیل یا رمز عبور اشتباه است.');
+                    }
 
-                    if (!BTL_Admin_Totp::isConfigured($user->ID)) {
+                    BTL_Login_Throttle::clearAttempts($throttleKey, $ip);
+
+                    if (user_can($user->ID, 'manage_woocommerce')) {
+                        $ticket = BTL_Admin_Totp::issuePendingTicket($user->ID);
+
+                        $isConfigured = BTL_Admin_Totp::isConfigured($user->ID);
                         return [
-                            'authToken' => null, 'refreshToken' => null,
-                            'requiresAdminTotp' => false, 'requiresAdminTotpSetup' => true,
+                            'authToken' => null,
+                            'refreshToken' => null,
+                            'requiresAdminTotp' => $isConfigured,
+                            'requiresAdminTotpSetup' => !$isConfigured,
                             'pendingTicket' => $ticket,
                         ];
                     }
 
+                    $tokens = BTL_Phone_Auth::issueTokens($user);
+
                     return [
-                        'authToken' => null, 'refreshToken' => null,
-                        'requiresAdminTotp' => true, 'requiresAdminTotpSetup' => false,
-                        'pendingTicket' => $ticket,
+                        'authToken' => $tokens['authToken'] ?? null,
+                        'refreshToken' => $tokens['refreshToken'] ?? null,
+                        'requiresAdminTotp' => false,
+                        'requiresAdminTotpSetup' => false,
+                        'pendingTicket' => null,
                     ];
-                }
-
-                $tokens = BTL_Phone_Auth::issueTokens($user);
-
-                return [
-                    'authToken' => $tokens['authToken'],
-                    'refreshToken' => $tokens['refreshToken'],
-                    'requiresAdminTotp' => false,
-                    'requiresAdminTotpSetup' => false,
-                    'pendingTicket' => null,
-                ];
+                });
             },
         ]);
 
@@ -102,41 +113,48 @@ final class BTL_Credentials_Auth
                 'success' => ['type' => 'Boolean'],
             ],
             'mutateAndGetPayload' => function ($input) {
-                if (!is_user_logged_in()) {
-                    throw new GraphQL\Error\UserError('باید وارد حساب کاربری شوید.');
-                }
-
-                $userId = get_current_user_id();
-                $user = get_userdata($userId);
-                if (!$user) {
-                    throw new GraphQL\Error\UserError('کاربر یافت نشد.');
-                }
-
-                $hasManual = (bool) get_user_meta($userId, self::MANUAL_PASSWORD_META, true);
-
-                if ($hasManual) {
-                    $current = (string) ($input['currentPassword'] ?? '');
-                    if ($current === '' || !wp_check_password($current, $user->user_pass, $userId)) {
-                        throw new GraphQL\Error\UserError('رمز عبور فعلی صحیح نیست.');
+                return self::safeExecute(function () use ($input) {
+                    if (!is_user_logged_in()) {
+                        throw new UserError('باید وارد حساب کاربری شوید.');
                     }
-                }
 
-                self::validatePasswordStrength((string) $input['newPassword']);
+                    $userId = get_current_user_id();
+                    $user = get_userdata($userId);
+                    if (!$user) {
+                        throw new UserError('کاربر یافت نشد.');
+                    }
 
-                wp_set_password((string) $input['newPassword'], $userId);
-                update_user_meta($userId, self::MANUAL_PASSWORD_META, 1);
+                    $hasManual = (bool) get_user_meta($userId, self::MANUAL_PASSWORD_META, true);
 
-                BTL_Sessions::revokeAllExcept($userId, $input['sessionId'] ?? null);
+                    if ($hasManual) {
+                        $current = (string) ($input['currentPassword'] ?? '');
+                        if ($current === '' || !wp_check_password($current, $user->user_pass, $userId)) {
+                            throw new UserError('رمز عبور فعلی صحیح نیست.');
+                        }
+                    }
 
-                BTL_Notifications::push(
-                    $userId,
-                    'رمز عبور حساب شما تغییر کرد 🔐',
-                    'اگر این تغییر توسط شما انجام نشده، فوراً از طریق تیکت پشتیبانی با ما در ارتباط باشید.',
-                    '/my-account/settings',
-                    'account'
-                );
+                    $newPassword = (string) $input['newPassword'];
+                    self::validatePasswordStrength($newPassword);
 
-                return ['success' => true];
+                    wp_set_password($newPassword, $userId);
+                    update_user_meta($userId, self::MANUAL_PASSWORD_META, 1);
+
+                    if (function_exists('wp_set_auth_cookie')) {
+                        wp_set_auth_cookie($userId, true);
+                    }
+
+                    BTL_Sessions::revokeAllExcept($userId, $input['sessionId'] ?? null);
+
+                    BTL_Notifications::push(
+                        $userId,
+                        'رمز عبور حساب شما تغییر کرد 🔐',
+                        'اگر این تغییر توسط شما انجام نشده، فوراً از طریق تیکت پشتیبانی با ما در ارتباط باشید.',
+                        '/my-account/settings',
+                        'account'
+                    );
+
+                    return ['success' => true];
+                });
             },
         ]);
     }
@@ -165,13 +183,27 @@ final class BTL_Credentials_Auth
     public static function validatePasswordStrength(string $password): void
     {
         if (mb_strlen($password) < 8) {
-            throw new GraphQL\Error\UserError('رمز عبور باید حداقل ۸ کاراکتر باشد.');
+            throw new UserError('رمز عبور باید حداقل ۸ کاراکتر باشد.');
         }
         if (mb_strlen($password) > 100) {
-            throw new GraphQL\Error\UserError('رمز عبور بیش از حد طولانی است.');
+            throw new UserError('رمز عبور بیش از حد طولانی است.');
         }
         if (!preg_match('/[A-Za-z]/', $password) || !preg_match('/[0-9]/', $password)) {
-            throw new GraphQL\Error\UserError('رمز عبور باید ترکیبی از حروف انگلیسی و عدد باشد.');
+            throw new UserError('رمز عبور باید ترکیبی از حروف انگلیسی و عدد باشد.');
+        }
+    }
+
+    private static function safeExecute(callable $fn)
+    {
+        try {
+            return $fn();
+        } catch (UserError $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            BTL_Helpers::logger(
+                'CredentialsAuth fatal: ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine()
+            );
+            throw new UserError('خطای داخلی سرور رخ داد، لطفاً با پشتیبانی تماس بگیرید.');
         }
     }
 }

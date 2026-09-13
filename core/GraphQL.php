@@ -728,23 +728,22 @@ final class BTL_GraphQL
                     throw new GraphQL\Error\UserError('باید وارد حساب کاربری شوید.');
                 }
 
-                $avatarUrl = esc_url_raw($input['avatarUrl']);
+                $avatarId = sanitize_text_field($input['avatarUrl']);
 
-                if (!preg_match('#^/avatars/(users|admin)/[A-Za-z0-9_\-]+\.(webp|png|jpe?g)$#', $avatarUrl)) {
-                    throw new GraphQL\Error\UserError('مسیر آواتار نامعتبر است.');
+                if (!preg_match('#^(users|admin)/[A-Za-z0-9_\-]+$#', $avatarId)) {
+                    throw new GraphQL\Error\UserError('آواتار انتخاب‌شده نامعتبر است.');
                 }
 
                 $userId = get_current_user_id();
-                update_user_meta($userId, 'btl_avatar_url', $avatarUrl);
+                update_user_meta($userId, 'btl_avatar_url', $avatarId);
 
-                return ['success' => true, 'avatarUrl' => $avatarUrl];
+                return ['success' => true, 'avatarUrl' => $avatarId];
             },
         ]);
 
         register_graphql_mutation('updateCustomerProfile', [
             'inputFields' => [
-                'firstName' => ['type' => 'String'],
-                'lastName' => ['type' => 'String'],
+                'displayName' => ['type' => 'String'],
                 'email' => ['type' => 'String'],
             ],
             'outputFields' => [
@@ -760,12 +759,15 @@ final class BTL_GraphQL
                 $userId = get_current_user_id();
                 $updateArgs = ['ID' => $userId];
 
-                if (isset($input['firstName'])) {
-                    $updateArgs['first_name'] = sanitize_text_field($input['firstName']);
+                if (isset($input['displayName'])) {
+                    $displayName = trim(sanitize_text_field($input['displayName']));
+                    if (mb_strlen($displayName) < 2) {
+                        throw new GraphQL\Error\UserError('نام نمایشی باید حداقل ۲ کاراکتر باشد.');
+                    }
+                    $updateArgs['display_name'] = $displayName;
+                    $updateArgs['nickname'] = $displayName;
                 }
-                if (isset($input['lastName'])) {
-                    $updateArgs['last_name'] = sanitize_text_field($input['lastName']);
-                }
+
                 if (!empty($input['email'])) {
                     $email = sanitize_email($input['email']);
                     if (!is_email($email)) {
@@ -776,12 +778,6 @@ final class BTL_GraphQL
                         throw new GraphQL\Error\UserError('این ایمیل قبلاً استفاده شده است.');
                     }
                     $updateArgs['user_email'] = $email;
-                }
-
-                if (isset($input['firstName']) || isset($input['lastName'])) {
-                    $first = $input['firstName'] ?? get_user_meta($userId, 'first_name', true);
-                    $last = $input['lastName'] ?? get_user_meta($userId, 'last_name', true);
-                    $updateArgs['display_name'] = trim($first . ' ' . $last) ?: null;
                 }
 
                 $result = wp_update_user($updateArgs);

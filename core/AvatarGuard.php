@@ -3,7 +3,8 @@ defined('ABSPATH') || exit;
 
 final class BTL_Avatar_Guard
 {
-    private const ADMIN_PREFIX = '/avatars/admin/';
+    private const ADMIN_ID_PREFIX = 'admin/';
+    private const ADMIN_LEGACY_PREFIX = '/avatars/admin/';
 
     public static function boot(): void
     {
@@ -16,7 +17,11 @@ final class BTL_Avatar_Guard
             return $check;
         }
 
-        if (strpos((string)$metaValue, self::ADMIN_PREFIX) !== 0) {
+        $value = (string) $metaValue;
+        $isAdminScoped = strpos($value, self::ADMIN_ID_PREFIX) === 0
+            || strpos($value, self::ADMIN_LEGACY_PREFIX) === 0;
+
+        if (!$isAdminScoped) {
             return $check;
         }
 
