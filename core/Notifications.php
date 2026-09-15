@@ -4,26 +4,50 @@ defined('ABSPATH') || exit;
 final class BTL_Notifications
 {
     private const READY_OPTION = 'btl_notifications_table_ready';
+    private const TYPE_COLUMN_READY_OPTION = 'btl_notifications_type_column_ready';
     private const KEEP_PER_USER = 10;
 
-    public static function table(): string { global $wpdb; return $wpdb->prefix . 'btl_notifications'; }
+    public static function table(): string
+    {
+        global $wpdb;
+
+        return $wpdb->prefix . 'btl_notifications';
+    }
 
     public static function boot(): void
     {
-        add_action('init', [self::class, 'maybe_install'], 5);
-        add_action('woocommerce_order_status_completed', [self::class, 'notify_order_completed']);
+        add_action(
+            'init',
+            [self::class, 'maybe_install'],
+            5
+        );
+
+        add_action(
+            'woocommerce_order_status_completed',
+            [self::class, 'notify_order_completed']
+        );
     }
 
     public static function maybe_install(): void
     {
-        BTL_Helpers::ensureTable(self::READY_OPTION, [self::class, 'install']);
-        self::maybe_add_type_column();
+        BTL_Helpers::ensureTable(
+            self::READY_OPTION,
+            [self::class, 'install']
+        );
+
+        BTL_Helpers::ensureTable(
+            self::TYPE_COLUMN_READY_OPTION,
+            [self::class, 'maybe_add_type_column']
+        );
     }
 
     public static function install(): void
     {
         global $wpdb;
-        $table = self::table(); $charset = $wpdb->get_charset_collate();
+
+        $table = self::table();
+        $charset = $wpdb->get_charset_collate();
+
         $sql = "CREATE TABLE {$table} (
             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
             user_id BIGINT UNSIGNED NOT NULL,
@@ -36,71 +60,144 @@ final class BTL_Notifications
             KEY user_id (user_id, is_read),
             KEY user_type (user_id, type)
         ) {$charset};";
+
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
         dbDelta($sql);
     }
 
-    private static function maybe_add_type_column(): void
+    public static function maybe_add_type_column(): void
     {
         global $wpdb;
+
         $table = self::table();
-        $exists = $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND COLUMN_NAME='type'",
-            DB_NAME, $table
-        ));
-        if ((int)$exists === 0) {
-            $wpdb->query("ALTER TABLE {$table} ADD COLUMN type VARCHAR(20) NOT NULL DEFAULT 'engagement' AFTER user_id");
-            $wpdb->query("ALTER TABLE {$table} ADD KEY user_type (user_id, type)");
+
+        $exists = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND COLUMN_NAME='type'",
+                DB_NAME,
+                $table
+            )
+        );
+
+        if ((int) $exists === 0) {
+            $wpdb->query(
+                "ALTER TABLE {$table} ADD COLUMN type VARCHAR(20) NOT NULL DEFAULT 'engagement' AFTER user_id"
+            );
+
+            $wpdb->query(
+                "ALTER TABLE {$table} ADD KEY user_type (user_id, type)"
+            );
         }
     }
 
-    public static function push(int $userId, string $title, string $body, ?string $link = null, string $type = 'engagement'): void
-    {
+    public static function push(
+        int $userId,
+        string $title,
+        string $body,
+        ?string $link = null,
+        string $type = 'engagement'
+    ): void {
         global $wpdb;
-        $wpdb->insert(self::table(), [
-            'user_id' => $userId, 'type' => $type, 'title' => $title, 'body' => $body, 'link' => $link,
-        ]);
-        self::trimOldForUser($userId, $type);
+
+        $wpdb->insert(
+            self::table(),
+            [
+                'user_id' => $userId,
+                'type' => $type,
+                'title' => $title,
+                'body' => $body,
+                'link' => $link,
+            ]
+        );
+
+        self::trimOldForUser(
+            $userId,
+            $type
+        );
     }
 
-    public static function forUser(int $userId, int $limit = 10): array
-    {
+    public static function forUser(
+        int $userId,
+        int $limit = 10
+    ): array {
         global $wpdb;
-        return $wpdb->get_results($wpdb->prepare(
-            "SELECT * FROM " . self::table() . " WHERE user_id=%d ORDER BY id DESC LIMIT %d", $userId, $limit
-        ), ARRAY_A);
+
+        return $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT * FROM " . self::table() . " WHERE user_id=%d ORDER BY id DESC LIMIT %d",
+                $userId,
+                $limit
+            ),
+            ARRAY_A
+        );
     }
 
     public static function markAllRead(int $userId): void
     {
         global $wpdb;
-        $wpdb->update(self::table(), ['is_read' => 1], ['user_id' => $userId, 'is_read' => 0]);
+
+        $wpdb->update(
+            self::table(),
+            ['is_read' => 1],
+            [
+                'user_id' => $userId,
+                'is_read' => 0,
+            ]
+        );
     }
 
     public static function notify_order_completed(int $orderId): void
     {
         $order = wc_get_order($orderId);
-        if (!$order) return;
+
+        if (!$order) {
+            return;
+        }
+
         self::push(
-            (int)$order->get_customer_id(),
+            (int) $order->get_customer_id(),
             'سفارش شما تحویل داده شد 🎉',
             "سفارش #{$order->get_order_number()} با موفقیت تکمیل شد.",
             '/my-account/orders'
         );
     }
 
-    private static function trimOldForUser(int $userId, string $type): void
-    {
+    private static function trimOldForUser(
+        int $userId,
+        string $type
+    ): void {
         global $wpdb;
+
         $table = self::table();
-        $staleIds = $wpdb->get_col($wpdb->prepare(
-            "SELECT id FROM {$table} WHERE user_id=%d AND type=%s ORDER BY id DESC LIMIT 1000 OFFSET %d",
-            $userId, $type, self::KEEP_PER_USER
-        ));
 
-        if (!$staleIds) return;
+        $staleIds = $wpdb->get_col(
+            $wpdb->prepare(
+                "SELECT id FROM {$table} WHERE user_id=%d AND type=%s ORDER BY id DESC LIMIT 1000 OFFSET %d",
+                $userId,
+                $type,
+                self::KEEP_PER_USER
+            )
+        );
 
-        $placeholders = implode(',', array_fill(0, count($staleIds), '%d'));
-        $wpdb->query($wpdb->prepare("DELETE FROM {$table} WHERE id IN ({$placeholders})", $staleIds));
+        if (!$staleIds) {
+            return;
+        }
+
+        $placeholders = implode(
+            ',',
+            array_fill(
+                0,
+                count($staleIds),
+                '%d'
+            )
+        );
+
+        $wpdb->query(
+            $wpdb->prepare(
+                "DELETE FROM {$table} WHERE id IN ({$placeholders})",
+                $staleIds
+            )
+        );
     }
 }

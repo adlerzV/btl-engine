@@ -1,5 +1,4 @@
 <?php
-
 defined('ABSPATH') || exit;
 
 final class BTL_Revalidator
@@ -7,6 +6,8 @@ final class BTL_Revalidator
     private const GROUP = 'btl';
     private const CACHE_KEY = 'btl_revalidate_tags';
     private const LOCK_KEY = 'btl_revalidate_lock';
+
+    private static bool $flushScheduledThisRequest = false;
 
     public static function boot(): void
     {
@@ -24,22 +25,20 @@ final class BTL_Revalidator
             return;
         }
 
-        $current =
-            get_transient(
-                self::CACHE_KEY
-            );
+        $current = get_transient(
+            self::CACHE_KEY
+        );
 
         if (!is_array($current)) {
             $current = [];
         }
 
-        $merged =
-            array_unique(
-                array_merge(
-                    $current,
-                    $tags
-                )
-            );
+        $merged = array_unique(
+            array_merge(
+                $current,
+                $tags
+            )
+        );
 
         set_transient(
             self::CACHE_KEY,
@@ -47,10 +46,14 @@ final class BTL_Revalidator
             300
         );
 
+        if (self::$flushScheduledThisRequest) {
+            return;
+        }
+
+        self::$flushScheduledThisRequest = true;
+
         if (
-            function_exists(
-                'as_has_scheduled_action'
-            ) &&
+            function_exists('as_has_scheduled_action') &&
             !as_has_scheduled_action(
                 'btl_revalidate_flush',
                 [],
@@ -83,10 +86,9 @@ final class BTL_Revalidator
         );
 
         try {
-            $tags =
-                get_transient(
-                    self::CACHE_KEY
-                );
+            $tags = get_transient(
+                self::CACHE_KEY
+            );
 
             if (
                 !is_array($tags) ||
@@ -101,12 +103,9 @@ final class BTL_Revalidator
 
             self::send(
                 array_values(
-                    array_unique(
-                        $tags
-                    )
+                    array_unique($tags)
                 )
             );
-
         } finally {
             delete_transient(
                 self::LOCK_KEY
@@ -117,28 +116,25 @@ final class BTL_Revalidator
     private static function send(
         array $tags
     ): void {
-        $tags =
-            array_slice(
-                array_unique($tags),
-                0,
-                1000
-            );
+        $tags = array_slice(
+            array_unique($tags),
+            0,
+            1000
+        );
 
         if (!$tags) {
             return;
         }
 
-        $endpoint =
-            defined(
-                'NEXTJS_API_URL'
-            )
+        $endpoint = defined(
+            'NEXTJS_API_URL'
+        )
             ? NEXTJS_API_URL
             : '';
 
-        $secret =
-            defined(
-                'NEXTJS_REVALIDATE_SECRET'
-            )
+        $secret = defined(
+            'NEXTJS_REVALIDATE_SECRET'
+        )
             ? NEXTJS_REVALIDATE_SECRET
             : '';
 
@@ -155,15 +151,14 @@ final class BTL_Revalidator
                 'timeout' => 15,
                 'blocking' => false,
                 'headers' => [
-                    'Content-Type' =>
-                        'application/json',
-                    'x-revalidate-secret' =>
-                        $secret
+                    'Content-Type' => 'application/json',
+                    'x-revalidate-secret' => $secret,
                 ],
-                'body' =>
-                    wp_json_encode([
-                        'tag' => $tags
-                    ])
+                'body' => wp_json_encode(
+                    [
+                        'tag' => $tags,
+                    ]
+                ),
             ]
         );
     }
