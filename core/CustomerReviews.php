@@ -1,5 +1,4 @@
 <?php
-// core/CustomerReviews.php
 defined('ABSPATH') || exit;
 
 final class BTL_Customer_Reviews
@@ -122,8 +121,13 @@ final class BTL_Customer_Reviews
                     $repliesByParent[(int)$reply->comment_parent][] = $reply;
                 }
 
+                $productIds = array_values(array_unique(array_map(static fn($c) => (int)$c->comment_post_ID, $comments)));
+                if ($productIds) {
+                    _prime_post_caches($productIds, false, false);
+                }
+
                 $nodes = array_map(static function ($comment) use ($repliesByParent) {
-                    $product = wc_get_product((int)$comment->comment_post_ID);
+                    $product = get_post((int)$comment->comment_post_ID);
                     $replyComments = $repliesByParent[(int)$comment->comment_ID] ?? [];
 
                     return [
@@ -133,8 +137,8 @@ final class BTL_Customer_Reviews
                         'date' => $comment->comment_date,
                         'approved' => (string)$comment->comment_approved === '1',
                         'productId' => (int)$comment->comment_post_ID,
-                        'productName' => $product ? $product->get_name() : '',
-                        'productSlug' => $product ? $product->get_slug() : '',
+                        'productName' => $product ? $product->post_title : '',
+                        'productSlug' => $product ? $product->post_name : '',
                         'replies' => array_map(static function ($reply) {
                             return [
                                 'content' => $reply->comment_content,
