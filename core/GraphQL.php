@@ -20,6 +20,7 @@ final class BTL_GraphQL
             $args['graphql_single_name'] = 'SupportTicket';
             $args['graphql_plural_name'] = 'SupportTickets';
         }
+
         return $args;
     }
 
@@ -63,6 +64,7 @@ final class BTL_GraphQL
         }
 
         $excludedIds = self::region_excluded_product_ids($regionSlug);
+
         if (empty($excludedIds)) {
             return $query_args;
         }
@@ -70,7 +72,11 @@ final class BTL_GraphQL
         $existing = $query_args['post__not_in'] ?? [];
         $existing = is_array($existing) ? $existing : [$existing];
 
-        $query_args['post__not_in'] = array_values(array_unique(array_merge($existing, $excludedIds)));
+        $query_args['post__not_in'] = array_values(
+            array_unique(
+                array_merge($existing, $excludedIds)
+            )
+        );
 
         return $query_args;
     }
@@ -83,32 +89,35 @@ final class BTL_GraphQL
         return BTL_Cache::remember($cacheKey, static function () use ($aliases) {
             global $wpdb;
 
-            $restrictedIds = $wpdb->get_col(
-                "SELECT DISTINCT p.post_parent
+            $placeholders = implode(',', array_fill(0, count($aliases), '%s'));
+
+            $sql = $wpdb->prepare(
+                "SELECT p.post_parent
                  FROM {$wpdb->posts} p
                  INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID
                  WHERE p.post_type = 'product_variation'
                    AND p.post_status = 'publish'
-                   AND (pm.meta_key LIKE 'attribute_%region%' OR pm.meta_key LIKE '%ریجن%')"
+                   AND (
+                       pm.meta_key LIKE 'attribute_%region%'
+                       OR pm.meta_key LIKE 'attribute_%ریجن%'
+                   )
+                 GROUP BY p.post_parent
+                 HAVING SUM(
+                     CASE
+                         WHEN pm.meta_value IN ({$placeholders}) THEN 1
+                         ELSE 0
+                     END
+                 ) = 0",
+                $aliases
             );
 
-            if (!$restrictedIds) {
+            $excludedIds = $wpdb->get_col($sql);
+
+            if (!$excludedIds) {
                 return [];
             }
 
-            $placeholders = implode(',', array_fill(0, count($aliases), '%s'));
-            $matchingIds = $wpdb->get_col($wpdb->prepare(
-                "SELECT DISTINCT p.post_parent
-                 FROM {$wpdb->posts} p
-                 INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID
-                 WHERE p.post_type = 'product_variation'
-                   AND p.post_status = 'publish'
-                   AND (pm.meta_key LIKE 'attribute_%region%' OR pm.meta_key LIKE '%ریجن%')
-                   AND pm.meta_value IN ({$placeholders})",
-                $aliases
-            ));
-
-            return array_values(array_map('intval', array_diff($restrictedIds, $matchingIds)));
+            return array_values(array_map('intval', $excludedIds));
         }, 'btl_regions', DAY_IN_SECONDS);
     }
 
@@ -162,7 +171,7 @@ final class BTL_GraphQL
             'type' => 'String',
             'resolve' => static function ($term) {
                 return isset($term->name) ? $term->name : '';
-            }
+            },
         ]);
 
         register_graphql_field('PaRegionShop', 'flagUrl', [
@@ -187,7 +196,7 @@ final class BTL_GraphQL
 
                     return is_string($flag_value) && !empty($flag_value) ? $flag_value : null;
                 }, 'btl_media', DAY_IN_SECONDS);
-            }
+            },
         ]);
     }
 
@@ -216,8 +225,8 @@ final class BTL_GraphQL
                 'taxonomy' => ['type' => 'String'],
                 'value'    => ['type' => 'String'],
                 'slug'     => ['type' => 'String'],
-                'flagUrl'  => ['type' => 'String']
-            ]
+                'flagUrl'  => ['type' => 'String'],
+            ],
         ]);
 
         register_graphql_object_type('OptimizedVariationItem', [
@@ -235,7 +244,7 @@ final class BTL_GraphQL
                 'giftRegularPriceToman' => ['type' => 'String'],
                 'codeRegularPriceToman' => ['type' => 'String'],
                 'regionSlug'            => ['type' => 'String'],
-            ]
+            ],
         ]);
 
         register_graphql_object_type('CategoryImageType', [
@@ -243,11 +252,11 @@ final class BTL_GraphQL
                 'sourceUrl' => [
                     'type' => 'String',
                     'args' => [
-                        'size' => ['type' => 'String']
+                        'size' => ['type' => 'String'],
                     ],
-                    'resolve' => [BTL_GraphQL::class, 'resolve_category_image']
-                ]
-            ]
+                    'resolve' => [BTL_GraphQL::class, 'resolve_category_image'],
+                ],
+            ],
         ]);
 
         register_graphql_object_type('CategoryBannerItem', [
@@ -257,8 +266,8 @@ final class BTL_GraphQL
                 'link'        => ['type' => 'String'],
                 'imageUrl'    => ['type' => 'String'],
                 'secondimage' => ['type' => 'String'],
-                'image'       => ['type' => 'CategoryImageType']
-            ]
+                'image'       => ['type' => 'CategoryImageType'],
+            ],
         ]);
 
         register_graphql_object_type('HeroTabItem', [
@@ -269,14 +278,14 @@ final class BTL_GraphQL
                 'ctaText'     => ['type' => 'String'],
                 'ctaLink'     => ['type' => 'String'],
                 'imageUrl'    => ['type' => 'String'],
-            ]
+            ],
         ]);
 
         register_graphql_object_type('SecondaryGalleryItem', [
             'fields' => [
                 'description' => ['type' => 'String'],
-                'imageUrl'    => ['type' => 'String']
-                ]
+                'imageUrl'    => ['type' => 'String'],
+            ],
         ]);
 
         register_graphql_object_type('BtlNotification', [
@@ -295,19 +304,27 @@ final class BTL_GraphQL
             'args' => ['first' => ['type' => 'Int']],
             'resolve' => static function ($user, $args) {
                 $currentUserId = get_current_user_id();
+
                 if (!$currentUserId || $currentUserId !== (int)$user->databaseId) {
                     return [];
                 }
+
                 return BTL_Notifications::forUser($currentUserId, $args['first'] ?? 20);
             },
         ]);
 
         register_graphql_mutation('markNotificationsRead', [
             'inputFields' => [],
-            'outputFields' => ['success' => ['type' => 'Boolean']],
+            'outputFields' => [
+                'success' => ['type' => 'Boolean'],
+            ],
             'mutateAndGetPayload' => function () {
-                if (!is_user_logged_in()) throw new GraphQL\Error\UserError('باید وارد شوید.');
+                if (!is_user_logged_in()) {
+                    throw new GraphQL\Error\UserError('باید وارد شوید.');
+                }
+
                 BTL_Notifications::markAllRead(get_current_user_id());
+
                 return ['success' => true];
             },
         ]);
@@ -321,21 +338,24 @@ final class BTL_GraphQL
                 return BTL_Cache::remember("short_notify_{$product->databaseId}", static function () use ($product) {
                     return get_post_meta($product->databaseId, 'short-notify', true) ?: '';
                 }, 'btl', DAY_IN_SECONDS);
-            }
+            },
         ]);
 
         register_graphql_field('VariableProduct', 'variationCards', [
             'type' => ['list_of' => 'OptimizedVariationItem'],
             'resolve' => static function ($product) {
                 return BTL_GraphQL::variation_cards((int)$product->databaseId);
-            }
+            },
         ]);
 
         register_graphql_field('LineItem', 'fulfillmentStatus', [
             'type' => 'String',
             'resolve' => static function ($item) {
                 $orderItem = WC_Order_Factory::get_order_item($item->databaseId ?? 0);
-                return $orderItem ? ($orderItem->get_meta('_fulfillment_status') ?: 'queued') : 'queued';
+
+                return $orderItem
+                    ? ($orderItem->get_meta('_fulfillment_status') ?: 'queued')
+                    : 'queued';
             },
         ]);
 
@@ -343,6 +363,7 @@ final class BTL_GraphQL
             'type' => ['list_of' => 'SecondaryGalleryItem'],
             'resolve' => static function ($product) {
                 $id = $product->databaseId;
+
                 return BTL_Cache::remember("secondary_gallery_{$id}", static function () use ($id) {
                     $gallery = BTL_GraphQL::find_secondary_gallery_raw($id);
 
@@ -351,6 +372,7 @@ final class BTL_GraphQL
                     }
 
                     $formatted = [];
+
                     foreach ($gallery as $item) {
                         if (!is_array($item)) {
                             continue;
@@ -371,7 +393,7 @@ final class BTL_GraphQL
 
                     return $formatted;
                 }, 'btl', HOUR_IN_SECONDS);
-            }
+            },
         ]);
     }
 
@@ -379,21 +401,23 @@ final class BTL_GraphQL
     {
         $category_image_resolver = static function ($term) {
             $id = $term->term_id ?? $term->databaseId ?? null;
+
             return get_term_meta($id, 'categoryimage', true);
         };
 
         register_graphql_field('Category', 'categoryImage', [
             'type'    => 'CategoryImageType',
-            'resolve' => $category_image_resolver
+            'resolve' => $category_image_resolver,
         ]);
 
         register_graphql_field('ProductCategory', 'categoryImage', [
             'type'    => 'CategoryImageType',
-            'resolve' => $category_image_resolver
+            'resolve' => $category_image_resolver,
         ]);
 
         $banners_resolver = static function ($term) {
             $id = $term->term_id ?? $term->databaseId ?? null;
+
             if (!$id) {
                 return [];
             }
@@ -418,12 +442,14 @@ final class BTL_GraphQL
                 }
 
                 $formatted_banners = [];
+
                 foreach ($banners as $item) {
                     if (!is_array($item)) {
                         continue;
                     }
 
                     $imageUrl = '';
+
                     if (!empty($item['imageUrl'])) {
                         $imageUrl = $item['imageUrl'];
                     } elseif (!empty($item['image'])) {
@@ -437,6 +463,7 @@ final class BTL_GraphQL
                     }
 
                     $secondimage = '';
+
                     if (!empty($item['secondimage'])) {
                         if (is_numeric($item['secondimage'])) {
                             $secondimage = wp_get_attachment_url((int)$item['secondimage']) ?: '';
@@ -453,7 +480,7 @@ final class BTL_GraphQL
                         'link'        => $item['link'] ?? '',
                         'imageUrl'    => $imageUrl,
                         'secondimage' => $secondimage,
-                        'image'       => $item['image'] ?? null
+                        'image'       => $item['image'] ?? null,
                     ];
                 }
 
@@ -463,16 +490,17 @@ final class BTL_GraphQL
 
         register_graphql_field('ProductCategory', 'banners', [
             'type' => ['list_of' => 'CategoryBannerItem'],
-            'resolve' => $banners_resolver
+            'resolve' => $banners_resolver,
         ]);
 
         register_graphql_field('Category', 'banners', [
             'type' => ['list_of' => 'CategoryBannerItem'],
-            'resolve' => $banners_resolver
+            'resolve' => $banners_resolver,
         ]);
 
         $hero_tabs_resolver = static function ($term) {
             $id = $term->term_id ?? $term->databaseId ?? null;
+
             if (!$id) {
                 return [];
             }
@@ -493,12 +521,14 @@ final class BTL_GraphQL
                 }
 
                 $formatted_tabs = [];
+
                 foreach ($tabs as $item) {
                     if (!is_array($item)) {
                         continue;
                     }
 
                     $imageUrl = '';
+
                     if (!empty($item['image'])) {
                         if (is_numeric($item['image'])) {
                             $imageUrl = wp_get_attachment_url((int)$item['image']) ?: '';
@@ -525,12 +555,12 @@ final class BTL_GraphQL
 
         register_graphql_field('ProductCategory', 'heroTabs', [
             'type' => ['list_of' => 'HeroTabItem'],
-            'resolve' => $hero_tabs_resolver
+            'resolve' => $hero_tabs_resolver,
         ]);
 
         register_graphql_field('Category', 'heroTabs', [
             'type' => ['list_of' => 'HeroTabItem'],
-            'resolve' => $hero_tabs_resolver
+            'resolve' => $hero_tabs_resolver,
         ]);
     }
 
@@ -548,7 +578,7 @@ final class BTL_GraphQL
                 return BTL_Cache::remember("variation_count_{$id}", static function () use ($term) {
                     return isset($term->count) ? (int)$term->count : 0;
                 }, 'btl', DAY_IN_SECONDS);
-            }
+            },
         ]);
     }
 
@@ -564,14 +594,14 @@ final class BTL_GraphQL
                     return null;
                 }
 
-                $wc_order = wc_get_order((int) $order_id);
+                $wc_order = wc_get_order((int)$order_id);
 
                 if (!$wc_order) {
                     return null;
                 }
 
                 return $wc_order->get_checkout_payment_url();
-            }
+            },
         ]);
     }
 
@@ -596,26 +626,31 @@ final class BTL_GraphQL
                 $fieldType = sanitize_text_field($input['fieldType']);
 
                 $allowedFields = ['cdkey', 'email', 'password', 'battletag'];
+
                 if (!in_array($fieldType, $allowedFields, true)) {
                     throw new GraphQL\Error\UserError('این نوع فیلد از این مسیر قابل دسترسی نیست.');
                 }
 
                 $order = wc_get_order($orderId);
+
                 if (!$order) {
                     throw new GraphQL\Error\UserError('سفارش یافت نشد.');
                 }
 
                 $currentUserId = get_current_user_id();
+
                 if ((int)$order->get_customer_id() !== $currentUserId) {
                     throw new GraphQL\Error\UserError('دسترسی غیرمجاز.');
                 }
 
                 $blockedStatuses = ['cancelled', 'refunded', 'failed'];
+
                 if (in_array($order->get_status(), $blockedStatuses, true)) {
                     throw new GraphQL\Error\UserError('این سفارش لغو یا بازگشت داده شده است.');
                 }
 
                 $item = WC_Order_Factory::get_order_item($itemId);
+
                 if (!$item || (int)$item->get_order_id() !== $orderId) {
                     throw new GraphQL\Error\UserError('آیتم نامعتبر است.');
                 }
@@ -630,7 +665,12 @@ final class BTL_GraphQL
                     return ['values' => $values];
                 }
 
-                $value = BTL_Secure_Fields::revealForStaff($orderId, $itemId, $fieldType, $currentUserId);
+                $value = BTL_Secure_Fields::revealForStaff(
+                    $orderId,
+                    $itemId,
+                    $fieldType,
+                    $currentUserId
+                );
 
                 if ($value === null) {
                     throw new GraphQL\Error\UserError('اطلاعاتی یافت نشد (ممکن است سفارش تکمیل شده و اطلاعات پاک شده باشد).');
@@ -647,17 +687,19 @@ final class BTL_GraphQL
             'type' => ['list_of' => 'Int'],
             'resolve' => static function ($user) {
                 $currentUserId = get_current_user_id();
+
                 if (!$currentUserId || $currentUserId !== (int)$user->databaseId) {
                     return [];
                 }
 
                 $ids = get_user_meta($currentUserId, 'btl_wishlist_ids', true);
+
                 if (!is_array($ids)) {
                     return [];
                 }
 
                 return array_values(array_map('intval', $ids));
-            }
+            },
         ]);
 
         register_graphql_mutation('toggleWishlistItem', [
@@ -676,6 +718,7 @@ final class BTL_GraphQL
                 $productId = (int)$input['productId'];
 
                 $ids = get_user_meta($userId, 'btl_wishlist_ids', true);
+
                 if (!is_array($ids)) {
                     $ids = [];
                 }
@@ -700,19 +743,22 @@ final class BTL_GraphQL
             'type' => 'String',
             'resolve' => static function ($user) {
                 $userId = (int)($user->databaseId ?? 0);
+
                 if (!$userId) {
                     return null;
                 }
+
                 return get_user_meta($userId, 'btl_avatar_url', true) ?: null;
-            }
+            },
         ]);
 
         register_graphql_field('User', 'isStaff', [
             'type' => 'Boolean',
             'resolve' => static function ($user) {
-                $userId = (int) ($user->databaseId ?? 0);
+                $userId = (int)($user->databaseId ?? 0);
+
                 return $userId ? user_can($userId, 'manage_woocommerce') : false;
-            }
+            },
         ]);
 
         register_graphql_mutation('updateUserAvatar', [
@@ -735,9 +781,13 @@ final class BTL_GraphQL
                 }
 
                 $userId = get_current_user_id();
+
                 update_user_meta($userId, 'btl_avatar_url', $avatarId);
 
-                return ['success' => true, 'avatarUrl' => $avatarId];
+                return [
+                    'success' => true,
+                    'avatarUrl' => $avatarId,
+                ];
             },
         ]);
 
@@ -761,29 +811,37 @@ final class BTL_GraphQL
 
                 if (isset($input['displayName'])) {
                     $displayName = trim(sanitize_text_field($input['displayName']));
+
                     if (mb_strlen($displayName) < 2) {
                         throw new GraphQL\Error\UserError('نام نمایشی باید حداقل ۲ کاراکتر باشد.');
                     }
+
                     $updateArgs['display_name'] = $displayName;
                     $updateArgs['nickname'] = $displayName;
                 }
 
                 if (!empty($input['email'])) {
                     $email = sanitize_email($input['email']);
+
                     if (!is_email($email)) {
                         throw new GraphQL\Error\UserError('ایمیل نامعتبر است.');
                     }
+
                     $existing = email_exists($email);
+
                     if ($existing && (int)$existing !== $userId) {
                         throw new GraphQL\Error\UserError('این ایمیل قبلاً استفاده شده است.');
                     }
+
                     $updateArgs['user_email'] = $email;
                 }
 
                 $result = wp_update_user($updateArgs);
 
                 if (is_wp_error($result)) {
-                    throw new GraphQL\Error\UserError('بروزرسانی با خطا مواجه شد: ' . $result->get_error_message());
+                    throw new GraphQL\Error\UserError(
+                        'بروزرسانی با خطا مواجه شد: ' . $result->get_error_message()
+                    );
                 }
 
                 $user = get_userdata($userId);
@@ -801,17 +859,30 @@ final class BTL_GraphQL
     {
         register_graphql_object_type('SupportTicketReply', [
             'fields' => [
-                'id' => ['type' => 'ID', 'resolve' => fn($r) => (string)$r['id']],
-                'authorRole' => ['type' => 'String', 'resolve' => fn($r) => $r['author_role']],
+                'id' => [
+                    'type' => 'ID',
+                    'resolve' => fn($r) => (string)$r['id'],
+                ],
+                'authorRole' => [
+                    'type' => 'String',
+                    'resolve' => fn($r) => $r['author_role'],
+                ],
                 'authorName' => [
                     'type' => 'String',
                     'resolve' => static function ($r) {
                         $u = get_userdata((int)$r['author_id']);
+
                         return $u ? $u->display_name : 'کاربر';
-                    }
+                    },
                 ],
-                'content' => ['type' => 'String', 'resolve' => fn($r) => $r['content']],
-                'createdAt' => ['type' => 'String', 'resolve' => fn($r) => $r['created_at']],
+                'content' => [
+                    'type' => 'String',
+                    'resolve' => fn($r) => $r['content'],
+                ],
+                'createdAt' => [
+                    'type' => 'String',
+                    'resolve' => fn($r) => $r['created_at'],
+                ],
             ],
         ]);
 
@@ -819,33 +890,40 @@ final class BTL_GraphQL
             'type' => 'Int',
             'resolve' => static function ($ticket) {
                 $value = get_post_meta($ticket->databaseId, 'linked_order_id', true);
+
                 return $value !== '' ? (int)$value : null;
-            }
+            },
         ]);
 
         register_graphql_field('SupportTicket', 'customerName', [
             'type' => 'String',
             'resolve' => static function ($ticket) {
-                $customerId = (int) get_post_meta($ticket->databaseId, 'customer_id', true);
-                if (!$customerId) return null;
+                $customerId = (int)get_post_meta($ticket->databaseId, 'customer_id', true);
+
+                if (!$customerId) {
+                    return null;
+                }
+
                 $user = get_userdata($customerId);
+
                 return $user ? $user->display_name : null;
-            }
+            },
         ]);
 
         register_graphql_field('SupportTicket', 'ticketStatus', [
             'type' => 'String',
             'resolve' => static function ($ticket) {
                 return get_post_meta($ticket->databaseId, 'ticket_status', true) ?: 'open';
-            }
+            },
         ]);
 
         register_graphql_field('SupportTicket', 'customerId', [
             'type' => 'Int',
             'resolve' => static function ($ticket) {
                 $value = get_post_meta($ticket->databaseId, 'customer_id', true);
+
                 return $value !== '' ? (int)$value : null;
-            }
+            },
         ]);
 
         register_graphql_field('SupportTicket', 'replies', [
@@ -853,11 +931,13 @@ final class BTL_GraphQL
             'resolve' => static function ($ticket) {
                 $ownerId = (int)get_post_meta($ticket->databaseId, 'customer_id', true);
                 $currentUserId = get_current_user_id();
+
                 if ($ownerId !== $currentUserId && !current_user_can('manage_woocommerce')) {
                     return [];
                 }
+
                 return BTL_Ticket_Replies::forTicket($ticket->databaseId);
-            }
+            },
         ]);
 
         register_graphql_mutation('submitSupportTicket', [
@@ -885,7 +965,9 @@ final class BTL_GraphQL
                 ], true);
 
                 if (is_wp_error($postId)) {
-                    throw new GraphQL\Error\UserError('ثبت تیکت با خطا مواجه شد: ' . $postId->get_error_message());
+                    throw new GraphQL\Error\UserError(
+                        'ثبت تیکت با خطا مواجه شد: ' . $postId->get_error_message()
+                    );
                 }
 
                 update_post_meta($postId, 'customer_id', $userId);
@@ -915,6 +997,7 @@ final class BTL_GraphQL
 
                 $ticketId = (int)$input['ticketId'];
                 $post = get_post($ticketId);
+
                 if (!$post || $post->post_type !== 'support_ticket') {
                     throw new GraphQL\Error\UserError('تیکت یافت نشد.');
                 }
@@ -928,20 +1011,34 @@ final class BTL_GraphQL
                 }
 
                 $content = wp_kses_post(trim($input['content']));
+
                 if ($content === '') {
                     throw new GraphQL\Error\UserError('متن پاسخ خالی است.');
                 }
 
-                BTL_Ticket_Replies::add($ticketId, $currentUserId, $isStaff ? 'staff' : 'customer', $content);
+                BTL_Ticket_Replies::add(
+                    $ticketId,
+                    $currentUserId,
+                    $isStaff ? 'staff' : 'customer',
+                    $content
+                );
 
                 $newStatus = $isStaff ? 'answered' : 'open';
                 update_post_meta($ticketId, 'ticket_status', $newStatus);
 
                 if ($isStaff) {
-                    BTL_Notifications::push($ownerId, 'پاسخ جدید در تیکت شما', 'تیکت «' . get_the_title($ticketId) . '» پاسخ داده شد.', '/my-account/tickets/' . $ticketId);
+                    BTL_Notifications::push(
+                        $ownerId,
+                        'پاسخ جدید در تیکت شما',
+                        'تیکت «' . get_the_title($ticketId) . '» پاسخ داده شد.',
+                        '/my-account/tickets/' . $ticketId
+                    );
                 }
 
-                return ['success' => true, 'ticketStatus' => $newStatus];
+                return [
+                    'success' => true,
+                    'ticketStatus' => $newStatus,
+                ];
             },
         ]);
 
@@ -990,6 +1087,7 @@ final class BTL_GraphQL
             }
 
             $cards = [];
+
             foreach ($children as $variation_id) {
                 $variation = wc_get_product($variation_id);
 
@@ -1010,9 +1108,14 @@ final class BTL_GraphQL
         $manual_code = $variation->get_meta('_code_price_toman');
 
         $region_slug = 'eu';
+
         foreach ($variation->get_variation_attributes() as $key => $value) {
             $taxonomy = str_replace('attribute_', '', $key);
-            if (strpos(strtolower($taxonomy), 'region') !== false || strpos($taxonomy, 'ریجن') !== false) {
+
+            if (
+                strpos(strtolower($taxonomy), 'region') !== false ||
+                strpos($taxonomy, 'ریجن') !== false
+            ) {
                 $region_slug = $value;
                 break;
             }
@@ -1027,11 +1130,19 @@ final class BTL_GraphQL
             'salePrice'             => (string)$variation->get_sale_price(),
             'imageUrl'              => BTL_GraphQL::image_url($variation->get_image_id()),
             'attributes'            => BTL_GraphQL::attributes($variation),
-            'giftPriceToman'        => $manual_gift !== '' ? $manual_gift : ($variation->get_meta('giftPriceToman') ?: 'disabled'),
-            'codePriceToman'        => $manual_code !== '' ? $manual_code : ($variation->get_meta('codePriceToman') ?: 'disabled'),
-            'giftRegularPriceToman' => $manual_gift !== '' ? $manual_gift : ($variation->get_meta('giftRegularPriceToman') ?: 'disabled'),
-            'codeRegularPriceToman' => $manual_code !== '' ? $manual_code : ($variation->get_meta('codeRegularPriceToman') ?: 'disabled'),
-            'regionSlug'            => $region_slug
+            'giftPriceToman'        => $manual_gift !== ''
+                ? $manual_gift
+                : ($variation->get_meta('giftPriceToman') ?: 'disabled'),
+            'codePriceToman'        => $manual_code !== ''
+                ? $manual_code
+                : ($variation->get_meta('codePriceToman') ?: 'disabled'),
+            'giftRegularPriceToman' => $manual_gift !== ''
+                ? $manual_gift
+                : ($variation->get_meta('giftRegularPriceToman') ?: 'disabled'),
+            'codeRegularPriceToman' => $manual_code !== ''
+                ? $manual_code
+                : ($variation->get_meta('codeRegularPriceToman') ?: 'disabled'),
+            'regionSlug'            => $region_slug,
         ];
     }
 
@@ -1049,7 +1160,7 @@ final class BTL_GraphQL
                 'taxonomy' => $taxonomy,
                 'value'    => $term ? $term->name : $value,
                 'slug'     => $term ? $term->slug : $value,
-                'flagUrl'  => $flag_id ? BTL_GraphQL::image_url((int)$flag_id) : ''
+                'flagUrl'  => $flag_id ? BTL_GraphQL::image_url((int)$flag_id) : '',
             ];
         }
 
@@ -1058,9 +1169,14 @@ final class BTL_GraphQL
 
     private static function term(string $taxonomy, string $slug)
     {
-        return BTL_Cache::remember("{$taxonomy}_{$slug}", static function () use ($taxonomy, $slug) {
-            return get_term_by('slug', $slug, $taxonomy);
-        }, 'btl_terms', DAY_IN_SECONDS);
+        return BTL_Cache::remember(
+            "{$taxonomy}_{$slug}",
+            static function () use ($taxonomy, $slug) {
+                return get_term_by('slug', $slug, $taxonomy);
+            },
+            'btl_terms',
+            DAY_IN_SECONDS
+        );
     }
 
     private static function image_url(int $attachment_id): string
@@ -1069,16 +1185,23 @@ final class BTL_GraphQL
             return '';
         }
 
-        return BTL_Cache::remember("media_{$attachment_id}", static function () use ($attachment_id) {
-            $url = wp_get_attachment_url($attachment_id);
-            return $url ?: '';
-        }, 'btl_media', DAY_IN_SECONDS);
+        return BTL_Cache::remember(
+            "media_{$attachment_id}",
+            static function () use ($attachment_id) {
+                $url = wp_get_attachment_url($attachment_id);
+
+                return $url ?: '';
+            },
+            'btl_media',
+            DAY_IN_SECONDS
+        );
     }
 
     private static function find_secondary_gallery_raw(int $id)
     {
         if (function_exists('get_field')) {
             $viaAcf = get_field('secondary_gallery', $id);
+
             if (!empty($viaAcf)) {
                 return $viaAcf;
             }
@@ -1102,6 +1225,7 @@ final class BTL_GraphQL
         foreach ($candidateKeys as $key) {
             $value = get_post_meta($id, $key, true);
             $decoded = BTL_GraphQL::decode_repeater_value($value);
+
             if (!empty($decoded)) {
                 return $decoded;
             }
@@ -1118,8 +1242,13 @@ final class BTL_GraphQL
 
         if (is_string($value) && $value !== '') {
             $trimmed = trim($value);
-            if ($trimmed !== '' && ($trimmed[0] === '[' || $trimmed[0] === '{')) {
+
+            if (
+                $trimmed !== '' &&
+                ($trimmed[0] === '[' || $trimmed[0] === '{')
+            ) {
                 $decoded = json_decode($trimmed, true);
+
                 if (is_array($decoded)) {
                     return $decoded;
                 }
@@ -1131,7 +1260,15 @@ final class BTL_GraphQL
 
     private static function extract_gallery_item_image(array $item): string
     {
-        $imageKeys = ['imageUrl', 'image_url', 'image', 'img', 'photo', 'picture', 'src'];
+        $imageKeys = [
+            'imageUrl',
+            'image_url',
+            'image',
+            'img',
+            'photo',
+            'picture',
+            'src',
+        ];
 
         foreach ($imageKeys as $key) {
             if (empty($item[$key])) {
@@ -1142,9 +1279,11 @@ final class BTL_GraphQL
 
             if (is_numeric($value)) {
                 $url = wp_get_attachment_url((int)$value);
+
                 if ($url) {
                     return $url;
                 }
+
                 continue;
             }
 
@@ -1162,7 +1301,14 @@ final class BTL_GraphQL
 
     private static function extract_gallery_item_description(array $item): string
     {
-        $descriptionKeys = ['description', 'desc', 'text', 'caption', 'content', 'title'];
+        $descriptionKeys = [
+            'description',
+            'desc',
+            'text',
+            'caption',
+            'content',
+            'title',
+        ];
 
         foreach ($descriptionKeys as $key) {
             if (!empty($item[$key]) && is_string($item[$key])) {
@@ -1180,6 +1326,7 @@ final class BTL_GraphQL
         }
 
         $img_id = null;
+
         if (is_array($data) && isset($data['id'])) {
             $img_id = $data['id'];
         } elseif (is_numeric($data)) {
@@ -1187,8 +1334,12 @@ final class BTL_GraphQL
         }
 
         if ($img_id) {
-            $size = !empty($args['size']) ? strtolower(trim($args['size'], '"\'')) : 'full';
+            $size = !empty($args['size'])
+                ? strtolower(trim($args['size'], '"\''))
+                : 'full';
+
             $img_src = wp_get_attachment_image_src((int)$img_id, $size);
+
             return $img_src ? $img_src[0] : null;
         }
 
@@ -1202,9 +1353,14 @@ final class BTL_GraphQL
             'description' => 'شناسه‌ی نظر مادر. صفر یعنی نظر مستقل است (نه پاسخ).',
             'resolve' => static function ($comment) {
                 $commentId = $comment->commentId ?? $comment->databaseId ?? 0;
-                if (!$commentId) return 0;
+
+                if (!$commentId) {
+                    return 0;
+                }
+
                 $wpComment = get_comment($commentId);
-                return $wpComment ? (int) $wpComment->comment_parent : 0;
+
+                return $wpComment ? (int)$wpComment->comment_parent : 0;
             },
         ]);
 
@@ -1212,15 +1368,23 @@ final class BTL_GraphQL
             'type' => 'Boolean',
             'resolve' => static function ($comment) {
                 $commentId = $comment->commentId ?? $comment->databaseId ?? 0;
-                if (!$commentId) return false;
 
-                if ((bool) get_comment_meta($commentId, 'btl_is_staff_reply', true)) {
+                if (!$commentId) {
+                    return false;
+                }
+
+                if ((bool)get_comment_meta($commentId, 'btl_is_staff_reply', true)) {
                     return true;
                 }
 
                 $wpComment = get_comment($commentId);
-                if ($wpComment && (int) $wpComment->comment_parent > 0 && (int) $wpComment->user_id > 0) {
-                    return user_can((int) $wpComment->user_id, 'manage_woocommerce');
+
+                if (
+                    $wpComment &&
+                    (int)$wpComment->comment_parent > 0 &&
+                    (int)$wpComment->user_id > 0
+                ) {
+                    return user_can((int)$wpComment->user_id, 'manage_woocommerce');
                 }
 
                 return false;
@@ -1240,12 +1404,14 @@ final class BTL_GraphQL
                     throw new GraphQL\Error\UserError('فقط پشتیبانی می‌تواند به نظرات پاسخ دهد.');
                 }
 
-                $review = get_comment((int) $input['reviewId']);
+                $review = get_comment((int)$input['reviewId']);
+
                 if (!$review) {
                     throw new GraphQL\Error\UserError('نظر مورد نظر یافت نشد.');
                 }
 
                 $content = wp_kses_post(trim($input['content']));
+
                 if ($content === '') {
                     throw new GraphQL\Error\UserError('متن پاسخ خالی است.');
                 }
@@ -1265,9 +1431,12 @@ final class BTL_GraphQL
 
                 update_comment_meta($commentId, 'btl_is_staff_reply', 1);
 
-                $product = wc_get_product((int) $review->comment_post_ID);
+                $product = wc_get_product((int)$review->comment_post_ID);
+
                 if ($product && function_exists('btl_queue_revalidation')) {
-                    btl_queue_revalidation(["product-{$product->get_slug()}"]);
+                    btl_queue_revalidation([
+                        "product-{$product->get_slug()}",
+                    ]);
                 }
 
                 return ['success' => true];
