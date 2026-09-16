@@ -41,6 +41,8 @@ final class BTL_Price_Engine
         $guard_id = $product_id;
         self::$running[$guard_id] = true;
 
+        $pinned_id = 0;
+
         try {
             $product = wc_get_product(
                 $product_id
@@ -67,6 +69,14 @@ final class BTL_Price_Engine
 
             if (!$rates) {
                 return false;
+            }
+            if (class_exists('BTL_Invalidation')) {
+                $pinned_id = $product_id;
+
+                BTL_Invalidation::pin_scope(
+                    $pinned_id,
+                    BTL_Invalidation::SCOPE_PRICING
+                );
             }
 
             $items = $product->is_type('variable')
@@ -124,12 +134,18 @@ final class BTL_Price_Engine
             return $changed;
 
         } finally {
+            if (
+                $pinned_id &&
+                class_exists('BTL_Invalidation')
+            ) {
+                BTL_Invalidation::unpin_scope($pinned_id);
+            }
+
             unset(
                 self::$running[$guard_id]
             );
         }
     }
-
     private static function process_variation(
         WC_Product $variation,
         array $rates

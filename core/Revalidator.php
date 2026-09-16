@@ -7,9 +7,14 @@ final class BTL_Revalidator
     private const CACHE_KEY = 'btl_revalidate_tags';
     private const LOCK_KEY = 'btl_revalidate_lock';
     private const RETRY_KEY = 'btl_revalidate_retries';
+
+    private const QUEUE_TTL = 3600;
+    private const BATCH_SIZE = 1000;
+    private const MAX_QUEUE_SIZE = 20000;
     private const MAX_RETRIES = 3;
+    private const FLUSH_DELAY = 15;
+    private const NEXT_BATCH_DELAY = 5;
     private const RETRY_DELAY = 60;
-    private const MAX_TAGS = 1000;
 
     private static bool $flushScheduledThisRequest = false;
 
@@ -25,32 +30,9 @@ final class BTL_Revalidator
     public static function queue(
         array $tags
     ): void {
-        if (!$tags) {
+        if (!self::enqueue($tags)) {
             return;
         }
-
-        $current = get_transient(
-            self::CACHE_KEY
-        );
-
-        if (!is_array($current)) {
-            $current = [];
-        }
-
-        $merged = array_values(
-            array_unique(
-                array_merge(
-                    $current,
-                    $tags
-                )
-            )
-        );
-
-        set_transient(
-            self::CACHE_KEY,
-            $merged,
-            600
-        );
 
         if (self::$flushScheduledThisRequest) {
             return;
@@ -58,7 +40,60 @@ final class BTL_Revalidator
 
         self::$flushScheduledThisRequest = true;
 
-        self::schedule_flush(15);
+        self::schedule_flush(self::FLUSH_DELAY);
+    }
+
+    private static function enqueue(
+        array $tags,
+        bool $prepend = false
+    ): bool {
+        $tags = array_values(
+            array_filter(
+                array_map('strval', $tags),
+                static function ($tag) {
+                    return $tag !== '';
+                }
+            )
+        );
+
+        if (!$tags) {
+            return false;
+        }
+
+        $current = get_transient(self::CACHE_KEY);
+
+        if (!is_array($current)) {
+            $current = [];
+        }
+
+        $merged = $prepend
+            ? array_merge($tags, $current)
+            : array_merge($current, $tags);
+
+        $merged = array_values(array_unique($merged));
+
+        if (count($merged) > self::MAX_QUEUE_SIZE) {
+            BTL_Helpers::logger(
+                'Revalidator: queue overflow (' . count($merged) .
+                ') — collapsing to catalog-wide tags'
+            );
+
+            $merged = [
+                'products',
+                'home-featured',
+                'home-latest',
+                'banners',
+                'header-data',
+            ];
+        }
+
+        set_transient(
+            self::CACHE_KEY,
+            $merged,
+            self::QUEUE_TTL
+        );
+
+        return true;
     }
 
     private static function schedule_flush(
@@ -102,48 +137,62 @@ final class BTL_Revalidator
         set_transient(
             self::LOCK_KEY,
             1,
-            30
+            60
         );
 
+        $reschedule_in = 0;
+
         try {
-            $tags = get_transient(
-                self::CACHE_KEY
-            );
+            if (!self::is_configured()) {
+                BTL_Helpers::logger(
+                    'Revalidator: NEXTJS_API_URL یا NEXTJS_REVALIDATE_SECRET تعریف نشده — تگ‌ها در صف نگه داشته شدند.'
+                );
 
-            if (
-                !is_array($tags) ||
-                empty($tags)
-            ) {
                 return;
             }
 
-            delete_transient(
-                self::CACHE_KEY
-            );
+            $queued = get_transient(self::CACHE_KEY);
 
-            $payload = array_slice(
-                array_values(
-                    array_unique($tags)
-                ),
-                0,
-                self::MAX_TAGS
-            );
+            if (!is_array($queued) || !$queued) {
+                return;
+            }
 
-            if (self::send($payload)) {
+            $queued = array_values(array_unique($queued));
+
+            $batch = array_slice($queued, 0, self::BATCH_SIZE);
+            $remaining = array_slice($queued, self::BATCH_SIZE);
+
+            if ($remaining) {
+                set_transient(
+                    self::CACHE_KEY,
+                    $remaining,
+                    self::QUEUE_TTL
+                );
+            } else {
+                delete_transient(self::CACHE_KEY);
+            }
+
+            if (self::send($batch)) {
                 delete_transient(self::RETRY_KEY);
+
+                if ($remaining) {
+                    $reschedule_in = self::NEXT_BATCH_DELAY;
+                }
+
                 return;
             }
+
+            self::enqueue($batch, true);
 
             $retries = (int) get_transient(self::RETRY_KEY);
 
             if ($retries + 1 >= self::MAX_RETRIES) {
                 delete_transient(self::RETRY_KEY);
+                delete_transient(self::CACHE_KEY);
 
                 BTL_Helpers::logger(
-                    'Revalidator: giving up after ' .
-                    self::MAX_RETRIES .
-                    ' attempts — dropped tags: ' .
-                    wp_json_encode($payload)
+                    'Revalidator: dropped after ' . self::MAX_RETRIES .
+                    ' failed attempts — ' . wp_json_encode($batch)
                 );
 
                 return;
@@ -152,17 +201,28 @@ final class BTL_Revalidator
             set_transient(
                 self::RETRY_KEY,
                 $retries + 1,
-                600
+                self::QUEUE_TTL
             );
 
-            self::queue($payload);
-            self::schedule_flush(self::RETRY_DELAY, true);
+            $reschedule_in = self::RETRY_DELAY;
 
         } finally {
             delete_transient(
                 self::LOCK_KEY
             );
+
+            if ($reschedule_in > 0) {
+                self::schedule_flush($reschedule_in, true);
+            }
         }
+    }
+
+    private static function is_configured(): bool
+    {
+        return defined('NEXTJS_API_URL')
+            && NEXTJS_API_URL !== ''
+            && defined('NEXTJS_REVALIDATE_SECRET')
+            && NEXTJS_REVALIDATE_SECRET !== '';
     }
 
     private static function send(
@@ -172,26 +232,18 @@ final class BTL_Revalidator
             return true;
         }
 
-        $endpoint = defined('NEXTJS_API_URL')
-            ? NEXTJS_API_URL
-            : '';
-
-        $secret = defined('NEXTJS_REVALIDATE_SECRET')
-            ? NEXTJS_REVALIDATE_SECRET
-            : '';
-
-        if (!$endpoint || !$secret) {
-            return true;
+        if (!self::is_configured()) {
+            return false;
         }
 
         $response = wp_remote_post(
-            $endpoint,
+            NEXTJS_API_URL,
             [
                 'timeout' => 12,
                 'blocking' => true,
                 'headers' => [
                     'Content-Type' => 'application/json',
-                    'x-revalidate-secret' => $secret,
+                    'x-revalidate-secret' => NEXTJS_REVALIDATE_SECRET,
                 ],
                 'body' => wp_json_encode(
                     [

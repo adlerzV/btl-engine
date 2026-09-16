@@ -10,12 +10,37 @@ final class BTL_Invalidation
     private const LATEST_GRID_SIZE = 10;
     private const LATEST_CUTOFF_KEY = 'home_latest_cutoff';
 
-    private static array $queued = [];
+    private const PRICING_PROPS = [
+        'price',
+        'regular_price',
+        'sale_price',
+        'date_on_sale_from',
+        'date_on_sale_to',
+        'stock_quantity',
+        'stock_status',
+        'manage_stock',
+        'backorders',
+        'low_stock_amount',
+        'total_sales',
+        'children',
+        'variation_ids',
+    ];
+
+    private static array $emittedTags = [];
+
+    private static array $coveredParts = [];
+
+    private static array $pinnedScopes = [];
+
+    private static array $pendingChanges = [];
+
     private static array $deferred = [];
     private static bool $suspended = false;
 
     public static function boot(): void
     {
+        add_action('woocommerce_before_product_object_save', [self::class, 'capture_changes'], 5, 1);
+
         add_action('woocommerce_update_product', [self::class, 'on_product_saved'], 100, 1);
         add_action('woocommerce_new_product', [self::class, 'on_product_saved'], 100, 1);
         add_action('woocommerce_update_product_variation', [self::class, 'on_variation_saved'], 100, 1);
@@ -31,32 +56,43 @@ final class BTL_Invalidation
         add_action('acf/save_post', [self::class, 'on_acf_save'], 25, 1);
     }
 
-
     public static function queueProduct(int $productId, string $scope = self::SCOPE_ALL): void
     {
         if ($productId <= 0) {
             return;
         }
 
-        self::bustObjectCache($productId, $scope);
-
-        $key = $productId . ':' . $scope;
-        if (isset(self::$queued[$key])) {
-            return;
-        }
-        self::$queued[$key] = true;
+        $scope = self::applyPin($productId, $scope);
 
         if (self::$suspended) {
+            if (isset(self::$deferred[$productId])) {
+                return;
+            }
+
             self::$deferred[$productId] = true;
+            self::bustObjectCache($productId, [self::SCOPE_CONTENT, self::SCOPE_PRICING]);
+
             return;
         }
 
-        $tags = self::tagsForProduct($productId, $scope);
+        $missing = self::missingParts($productId, self::scopeParts($scope));
+
+        if (!$missing) {
+            return;
+        }
+
+        self::markCovered($productId, $missing);
+        self::bustObjectCache($productId, $missing);
+
+        $tags = self::dedupeTags(
+            self::tagsForProduct($productId, self::composeScope($missing))
+        );
 
         if ($tags && function_exists('btl_queue_revalidation')) {
             btl_queue_revalidation($tags);
         }
     }
+
 
     public static function tagsForProduct(int $productId, string $scope = self::SCOPE_ALL): array
     {
@@ -100,11 +136,24 @@ final class BTL_Invalidation
             return;
         }
 
-        $tags = self::tagsForTerm($term, $taxonomy);
+        $tags = self::dedupeTags(self::tagsForTerm($term, $taxonomy));
 
         if ($tags && function_exists('btl_queue_revalidation')) {
             btl_queue_revalidation($tags);
         }
+    }
+
+
+    public static function pin_scope(int $productId, string $scope): void
+    {
+        if ($productId > 0) {
+            self::$pinnedScopes[$productId] = $scope;
+        }
+    }
+
+    public static function unpin_scope(int $productId): void
+    {
+        unset(self::$pinnedScopes[$productId]);
     }
 
     public static function suspend(): void
@@ -116,12 +165,29 @@ final class BTL_Invalidation
     public static function resume(): array
     {
         self::$suspended = false;
-        $ids = array_keys(self::$deferred);
+        $ids = array_map('intval', array_keys(self::$deferred));
         self::$deferred = [];
 
-        return array_map('intval', $ids);
+        return $ids;
     }
 
+
+    public static function capture_changes($product): void
+    {
+        if (!$product instanceof WC_Product) {
+            return;
+        }
+
+        if ($product->is_type('variation')) {
+            return;
+        }
+
+        $id = (int) $product->get_id();
+
+        if ($id) {
+            self::$pendingChanges[$id] = array_keys($product->get_changes());
+        }
+    }
 
     public static function on_product_saved($product): void
     {
@@ -131,9 +197,11 @@ final class BTL_Invalidation
 
         $id = self::resolveProductId($product);
 
-        if ($id) {
-            self::queueProduct($id, self::SCOPE_ALL);
+        if (!$id) {
+            return;
         }
+
+        self::queueProduct($id, self::scopeFromChanges($id));
     }
 
     public static function on_variation_saved($variation): void
@@ -172,8 +240,10 @@ final class BTL_Invalidation
         BTL_Cache::delete(self::LATEST_CUTOFF_KEY);
         self::queueProduct((int) $post->ID, self::SCOPE_ALL);
 
-        if (function_exists('btl_queue_revalidation')) {
-            btl_queue_revalidation(['home-latest']);
+        $tags = self::dedupeTags(['home-latest']);
+
+        if ($tags && function_exists('btl_queue_revalidation')) {
+            btl_queue_revalidation($tags);
         }
     }
 
@@ -200,7 +270,7 @@ final class BTL_Invalidation
             return;
         }
 
-        $tags = self::tagsForTerm($deletedTerm, (string) $taxonomy);
+        $tags = self::dedupeTags(self::tagsForTerm($deletedTerm, (string) $taxonomy));
 
         if ($tags && function_exists('btl_queue_revalidation')) {
             btl_queue_revalidation($tags);
@@ -233,6 +303,105 @@ final class BTL_Invalidation
             self::queueTerm((int) $m[2], $m[1]);
         }
     }
+
+    private static function scopeFromChanges(int $productId): string
+    {
+        if (!array_key_exists($productId, self::$pendingChanges)) {
+            return self::SCOPE_ALL;
+        }
+
+        $changes = self::$pendingChanges[$productId];
+        unset(self::$pendingChanges[$productId]);
+
+        if (!$changes) {
+            return self::SCOPE_PRICING;
+        }
+
+        foreach ($changes as $key) {
+            if (!in_array($key, self::PRICING_PROPS, true)) {
+                return self::SCOPE_ALL;
+            }
+        }
+
+        return self::SCOPE_PRICING;
+    }
+
+    private static function applyPin(int $productId, string $scope): string
+    {
+        if (!isset(self::$pinnedScopes[$productId])) {
+            return $scope;
+        }
+
+        $pinned = self::$pinnedScopes[$productId];
+
+        return $pinned === self::SCOPE_ALL ? $scope : $pinned;
+    }
+
+    private static function scopeParts(string $scope): array
+    {
+        if ($scope === self::SCOPE_CONTENT) {
+            return [self::SCOPE_CONTENT];
+        }
+
+        if ($scope === self::SCOPE_PRICING) {
+            return [self::SCOPE_PRICING];
+        }
+
+        return [self::SCOPE_CONTENT, self::SCOPE_PRICING];
+    }
+
+    private static function composeScope(array $parts): string
+    {
+        $hasContent = in_array(self::SCOPE_CONTENT, $parts, true);
+        $hasPricing = in_array(self::SCOPE_PRICING, $parts, true);
+
+        if ($hasContent && $hasPricing) {
+            return self::SCOPE_ALL;
+        }
+
+        return $hasContent ? self::SCOPE_CONTENT : self::SCOPE_PRICING;
+    }
+
+    private static function missingParts(int $productId, array $parts): array
+    {
+        $covered = self::$coveredParts[$productId] ?? [];
+        $missing = [];
+
+        foreach ($parts as $part) {
+            if (empty($covered[$part])) {
+                $missing[] = $part;
+            }
+        }
+
+        return $missing;
+    }
+
+    private static function markCovered(int $productId, array $parts): void
+    {
+        foreach ($parts as $part) {
+            self::$coveredParts[$productId][$part] = true;
+        }
+    }
+
+    private static function dedupeTags(array $tags): array
+    {
+        $out = [];
+
+        foreach ($tags as $tag) {
+            if ($tag === '' || isset(self::$emittedTags[$tag])) {
+                continue;
+            }
+
+            self::$emittedTags[$tag] = true;
+            $out[] = $tag;
+        }
+
+        return $out;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  داخلی                                                              */
+    /* ------------------------------------------------------------------ */
 
     private static function tagsForTerm(WP_Term $term, string $taxonomy): array
     {
@@ -331,13 +500,13 @@ final class BTL_Invalidation
         return $post->post_date_gmt >= $cutoff;
     }
 
-    private static function bustObjectCache(int $productId, string $scope): void
+    private static function bustObjectCache(int $productId, array $parts): void
     {
-        if ($scope !== self::SCOPE_CONTENT) {
+        if (in_array(self::SCOPE_PRICING, $parts, true)) {
             wp_cache_delete("variations_{$productId}", 'btl');
         }
 
-        if ($scope !== self::SCOPE_PRICING) {
+        if (in_array(self::SCOPE_CONTENT, $parts, true)) {
             BTL_Cache::delete("short_notify_{$productId}");
             BTL_Cache::delete("secondary_gallery_{$productId}");
             BTL_Cache::delete("content_matrix_{$productId}");
