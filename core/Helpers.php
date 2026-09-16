@@ -79,6 +79,22 @@ final class BTL_Helpers
         );
     }
 
+    public static function slugTag(string $prefix, string $slug): string
+    {
+        $normalized = rawurldecode($slug);
+
+        $ascii = preg_replace('/[^a-zA-Z0-9-]+/', '-', $normalized);
+        $ascii = preg_replace('/-+/', '-', (string) $ascii);
+        $ascii = trim((string) $ascii, '-');
+        $ascii = substr($ascii, 0, 40);
+
+        $hash = substr(sha1($normalized), 0, 16);
+
+        return $ascii !== ''
+            ? "{$prefix}-{$ascii}-{$hash}"
+            : "{$prefix}-{$hash}";
+    }
+
     public static function ensureTable(
         string $readyOption,
         callable $installer

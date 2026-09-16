@@ -8,6 +8,8 @@ final class BTL_Scheduler
     private const LOCK_KEY = 'btl_batch_lock';
     private const BATCH_SIZE = 100;
     private const MAX_ITERATIONS = 500;
+    private const CHANGED_COUNTER_KEY = 'btl_batch_changed_count';
+    private const MAX_GRANULAR_PRODUCTS_PER_CHUNK = 40;
 
     public static function boot(): void
     {
@@ -184,20 +186,26 @@ final class BTL_Scheduler
             return;
         }
 
-        $revalidate_tags = [];
+        $useInvalidation = class_exists('BTL_Invalidation');
+
+        if ($useInvalidation) {
+            BTL_Invalidation::suspend();
+        }
+
+        $changed_ids = [];
 
         foreach (
             $products as $product_id
         ) {
             try {
-                BTL_Price_Engine::calculate(
-                    (int)$product_id,
-                    false
-                );
-
-                $revalidate_tags[] =
-                    "product-{$product_id}";
-
+                if (
+                    BTL_Price_Engine::calculate(
+                        (int)$product_id,
+                        false
+                    )
+                ) {
+                    $changed_ids[] = (int)$product_id;
+                }
             } catch (
                 Throwable $e
             ) {
@@ -211,18 +219,66 @@ final class BTL_Scheduler
             }
         }
 
+        if ($useInvalidation) {
+            BTL_Invalidation::resume();
+        }
+
+        if (!$changed_ids) {
+            return;
+        }
+
+        self::bump_changed_counter(
+            count($changed_ids)
+        );
+
+        if (!$useInvalidation) {
+            return;
+        }
+
         if (
-            $revalidate_tags &&
+            count($changed_ids) >
+            self::MAX_GRANULAR_PRODUCTS_PER_CHUNK
+        ) {
+            return;
+        }
+
+        $tags = [];
+
+        foreach ($changed_ids as $changed_id) {
+            foreach (
+                BTL_Invalidation::tagsForProduct(
+                    $changed_id,
+                    BTL_Invalidation::SCOPE_PRICING
+                ) as $tag
+            ) {
+                $tags[$tag] = true;
+            }
+        }
+
+        if (
+            $tags &&
             function_exists(
                 'btl_queue_revalidation'
             )
         ) {
             btl_queue_revalidation(
-                array_unique(
-                    $revalidate_tags
-                )
+                array_keys($tags)
             );
         }
+    }
+
+    private static function bump_changed_counter(
+        int $count
+    ): void {
+        $current = (int) get_transient(
+            self::CHANGED_COUNTER_KEY
+        );
+
+        set_transient(
+            self::CHANGED_COUNTER_KEY,
+            $current + $count,
+            HOUR_IN_SECONDS
+        );
     }
 
     public static function cleanup(): void
@@ -231,14 +287,29 @@ final class BTL_Scheduler
             self::LOCK_KEY
         );
 
+        $changed = (int) get_transient(
+            self::CHANGED_COUNTER_KEY
+        );
+
+        delete_transient(
+            self::CHANGED_COUNTER_KEY
+        );
+
+        if ($changed <= 0) {
+            return;
+        }
+
         if (
+            $changed >=
+            self::MAX_GRANULAR_PRODUCTS_PER_CHUNK &&
             function_exists(
                 'btl_queue_revalidation'
             )
         ) {
             btl_queue_revalidation([
                 'products',
-                'header-data'
+                'home-featured',
+                'home-latest'
             ]);
         }
     }

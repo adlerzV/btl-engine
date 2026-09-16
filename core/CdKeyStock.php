@@ -1,5 +1,4 @@
 <?php
-// core/CdKeyStock.php
 defined('ABSPATH') || exit;
 
 final class BTL_CdKey_Stock
@@ -108,6 +107,13 @@ final class BTL_CdKey_Stock
         if ($count > 0) {
             self::invalidate_stock_display_cache();
             self::backfillPendingOrders($productId, $variationId);
+
+            if (class_exists('BTL_Invalidation')) {
+                BTL_Invalidation::queueProduct(
+                    $productId,
+                    BTL_Invalidation::SCOPE_PRICING
+                );
+            }
         }
 
         return $count;
@@ -232,6 +238,8 @@ final class BTL_CdKey_Stock
             return;
         }
 
+        $touchedProducts = [];
+
         foreach ($order->get_items() as $itemId => $item) {
             if (!$item instanceof WC_Order_Item_Product) {
                 continue;
@@ -295,6 +303,19 @@ final class BTL_CdKey_Stock
                 );
 
                 break;
+            }
+
+            if ($assignedThisRun > 0) {
+                $touchedProducts[$productId] = true;
+            }
+        }
+
+        if ($touchedProducts && class_exists('BTL_Invalidation')) {
+            foreach (array_keys($touchedProducts) as $touchedId) {
+                BTL_Invalidation::queueProduct(
+                    (int)$touchedId,
+                    BTL_Invalidation::SCOPE_PRICING
+                );
             }
         }
     }

@@ -33,12 +33,13 @@ final class BTL_Price_Engine
     public static function calculate(
         int $product_id,
         bool $notify = true
-    ): void {
+    ): bool {
         if (isset(self::$running[$product_id])) {
-            return;
+            return false;
         }
 
-        self::$running[$product_id] = true;
+        $guard_id = $product_id;
+        self::$running[$guard_id] = true;
 
         try {
             $product = wc_get_product(
@@ -46,7 +47,7 @@ final class BTL_Price_Engine
             );
 
             if (!$product) {
-                return;
+                return false;
             }
 
             if ($product->is_type('variation')) {
@@ -58,14 +59,14 @@ final class BTL_Price_Engine
                 );
 
                 if (!$product) {
-                    return;
+                    return false;
                 }
             }
 
             $rates = self::rates();
 
             if (!$rates) {
-                return;
+                return false;
             }
 
             $items = $product->is_type('variable')
@@ -112,19 +113,19 @@ final class BTL_Price_Engine
             if (
                 $changed &&
                 $notify &&
-                function_exists(
-                    'btl_queue_revalidation'
-                )
+                class_exists('BTL_Invalidation')
             ) {
-                btl_queue_revalidation([
-                    'products',
-                    "product-{$product_id}"
-                ]);
+                BTL_Invalidation::queueProduct(
+                    $product_id,
+                    BTL_Invalidation::SCOPE_PRICING
+                );
             }
+
+            return $changed;
 
         } finally {
             unset(
-                self::$running[$product_id]
+                self::$running[$guard_id]
             );
         }
     }

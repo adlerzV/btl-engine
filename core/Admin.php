@@ -65,9 +65,25 @@ final class BTL_Admin
         $gift = self::sanitize($_POST['_gift_price_toman'][$index] ?? '');
         $code = self::sanitize($_POST['_code_price_toman'][$index] ?? '');
 
+        $oldGift = (string) $product->get_meta('_gift_price_toman');
+        $oldCode = (string) $product->get_meta('_code_price_toman');
+
+        if ($oldGift === $gift && $oldCode === $code) {
+            return;
+        }
+
         $product->update_meta_data('_gift_price_toman', $gift);
         $product->update_meta_data('_code_price_toman', $code);
         $product->save_meta_data();
+
+        $parentId = (int) wp_get_post_parent_id($variation_id);
+
+        if ($parentId && class_exists('BTL_Invalidation')) {
+            BTL_Invalidation::queueProduct(
+                $parentId,
+                BTL_Invalidation::SCOPE_PRICING
+            );
+        }
     }
 
     private static function sanitize($value): string

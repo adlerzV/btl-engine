@@ -9,6 +9,7 @@ function btl_autoload_core_class(string $class): void
         $map = [
             'BTL_Helpers' => 'Helpers.php',
             'BTL_Cache' => 'Cache.php',
+            'BTL_Invalidation' => 'Invalidation.php',
             'BTL_Price_Engine' => 'PriceEngine.php',
             'BTL_Rate_Gateway' => 'RateGateway.php',
             'BTL_Navasan_Rate_Gateway' => 'RateGateway.php',
@@ -66,12 +67,13 @@ function btl_autoload_core_class(string $class): void
 spl_autoload_register('btl_autoload_core_class');
 
 BTL_Region_Taxonomy::boot();
+BTL_Revalidator::boot();
+BTL_Invalidation::boot();
 BTL_Price_Engine::boot();
 BTL_Rate_Sync::boot();
 BTL_GraphQL::boot();
 BTL_Content_Matrix::boot();
 BTL_Scheduler::boot();
-BTL_Revalidator::boot();
 BTL_Secure_Fields::boot();
 BTL_Order_Security_Hooks::boot();
 BTL_Order_Fulfillment::boot();
