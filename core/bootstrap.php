@@ -15,6 +15,7 @@ function btl_autoload_core_class(string $class): void
             'BTL_Rate_Sync' => 'RateSync.php',
             'BTL_Region_Taxonomy' => 'RegionTaxonomy.php',
             'BTL_GraphQL' => 'GraphQL.php',
+            'BTL_Content_Matrix' => 'ContentMatrix.php',
             'BTL_Scheduler' => 'Scheduler.php',
             'BTL_Revalidator' => 'Revalidator.php',
             'BTL_Admin' => 'Admin.php',
@@ -68,6 +69,7 @@ BTL_Region_Taxonomy::boot();
 BTL_Price_Engine::boot();
 BTL_Rate_Sync::boot();
 BTL_GraphQL::boot();
+BTL_Content_Matrix::boot();
 BTL_Scheduler::boot();
 BTL_Revalidator::boot();
 BTL_Secure_Fields::boot();
