@@ -9,6 +9,8 @@ final class BTL_Order_Security_Hooks
         add_action('woocommerce_update_order_item', [self::class, 'encrypt_secure_meta'], 20, 3);
 
         add_action('woocommerce_order_status_changed', [self::class, 'wipe_on_terminal_status'], 10, 4);
+        add_action('before_delete_post', [self::class, 'wipe_on_delete'], 10);
+        add_action('woocommerce_before_delete_order', [self::class, 'wipe_on_delete'], 10);
     }
 
     public static function encrypt_secure_meta($item_id, $item, $order_id): void
@@ -21,16 +23,24 @@ final class BTL_Order_Security_Hooks
             $key = $data['key'];
             if (strpos($key, '_secure_') !== 0) continue;
 
-            $value = (string)$data['value'];
+            $value = (string) $data['value'];
             $fieldType = str_replace('_secure_', '', $key);
-
-            if ($value !== '') {
-                BTL_Secure_Fields::store((int)$order_id, (int)$item_id, $fieldType, $value);
+            $allowed = ['email', 'password', 'battletag', 'cdkey'];
+            $migrated = false;
+            if (in_array($fieldType, $allowed, true) && $value !== '') {
+                $source = $fieldType === 'cdkey' ? 'legacy:' . hash('sha256', $value) : 'legacy:' . $fieldType;
+                $migrated = $fieldType === 'cdkey'
+                    ? BTL_CdKey_Stock::storeManualAssignment((int)$order_id, (int)$item_id, $value, true)
+                    : BTL_Secure_Fields::store((int)$order_id, (int)$item_id, $fieldType, $value, $source);
+                if (!$migrated) {
+                    BTL_Helpers::logger("OrderSecurityHooks: secure migration failed for order {$order_id}, item {$item_id}");
+                }
             }
-
-            $item->delete_meta_data($key);
-            $item->add_meta_data('🔒 ' . self::secureLabel($fieldType), 'رمزنگاری‌شده', true);
-            $changed = true;
+            if ($migrated) {
+                $item->delete_meta_data($key);
+                $item->add_meta_data('🔒 ' . self::secureLabel($fieldType), 'رمزنگاری‌شده', true);
+                $changed = true;
+            }
         }
 
        
@@ -39,12 +49,21 @@ final class BTL_Order_Security_Hooks
 
     public static function wipe_on_terminal_status($orderId, $oldStatus, $newStatus, $order): void
     {
-        $terminalStatuses = ['completed', 'cancelled', 'failed', 'refunded'];
+        $terminalStatuses = ['completed', 'cancelled', 'failed', 'refunded', 'expired', 'trash'];
         if (!in_array($newStatus, $terminalStatuses, true)) return;
 
         $deleted = BTL_Secure_Fields::wipeCredentialsByOrder((int)$orderId);
         if ($deleted > 0) {
             BTL_Helpers::logger("Order #{$orderId}: {$deleted} credential field(s) wiped after status → {$newStatus}");
+        }
+    }
+
+    public static function wipe_on_delete($orderId): void
+    {
+        $orderId = (int)$orderId;
+        if ($orderId < 1) return;
+        if (get_post_type($orderId) === 'shop_order' || wc_get_order($orderId)) {
+            BTL_Secure_Fields::deleteByOrder($orderId);
         }
     }
 

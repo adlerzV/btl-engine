@@ -26,10 +26,11 @@ final class BTL_Blog_Follow
         $table = self::table();
         $charset = $wpdb->get_charset_collate();
         $sql = "CREATE TABLE {$table} (
-            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             user_id BIGINT UNSIGNED NOT NULL,
             category_id BIGINT UNSIGNED NOT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
             UNIQUE KEY user_category (user_id, category_id),
             KEY category_id (category_id)
         ) {$charset};";

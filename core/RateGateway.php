@@ -9,7 +9,7 @@ interface BTL_Rate_Gateway
 
 final class BTL_Navasan_Rate_Gateway implements BTL_Rate_Gateway
 {
-    private const BASE_URL = 'http://api.navasan.tech/latest/';
+    private const BASE_URL = 'https://api.navasan.tech/latest/';
 
     private const ITEM_MAP = [
         'USD' => 'usd_sell',
@@ -27,7 +27,7 @@ final class BTL_Navasan_Rate_Gateway implements BTL_Rate_Gateway
 
         $response = wp_remote_get(
             self::BASE_URL . '?api_key=' . rawurlencode(NAVASAN_API_KEY),
-            ['timeout' => 6]
+            ['timeout' => 10]
         );
 
         if (is_wp_error($response)) {

@@ -1,5 +1,4 @@
 <?php
-
 defined('ABSPATH') || exit;
 
 final class BTL_Secure_Vault
@@ -11,7 +10,10 @@ final class BTL_Secure_Vault
         }
         $raw = BTL_VAULT_KEY;
         if (str_starts_with($raw, 'base64:')) {
-            $raw = base64_decode(substr($raw, 7));
+            $raw = base64_decode(substr($raw, 7), true);
+            if ($raw === false) {
+                throw new RuntimeException('طول BTL_VAULT_KEY نامعتبر است.');
+            }
         }
         if (strlen($raw) !== SODIUM_CRYPTO_SECRETBOX_KEYBYTES) {
             throw new RuntimeException('طول BTL_VAULT_KEY نامعتبر است.');
@@ -22,17 +24,25 @@ final class BTL_Secure_Vault
     public static function encrypt(string $plaintext): string
     {
         $nonce = random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
-        $cipher = sodium_crypto_secretbox($plaintext, $nonce, self::key());
-        return base64_encode($nonce . $cipher);
+        return base64_encode($nonce . sodium_crypto_secretbox($plaintext, $nonce, self::key()));
     }
 
     public static function decrypt(string $payload): ?string
     {
-        $raw = base64_decode($payload, true);
-        if ($raw === false || strlen($raw) < SODIUM_CRYPTO_SECRETBOX_NONCEBYTES) return null;
-        $nonce = substr($raw, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
-        $cipher = substr($raw, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
-        $plain = sodium_crypto_secretbox_open($cipher, $nonce, self::key());
-        return $plain === false ? null : $plain;
+        try {
+            $raw = base64_decode($payload, true);
+            if ($raw === false || strlen($raw) <= SODIUM_CRYPTO_SECRETBOX_NONCEBYTES) return null;
+            $nonce = substr($raw, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+            $plain = sodium_crypto_secretbox_open(substr($raw, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES), $nonce, self::key());
+            return $plain === false ? null : $plain;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    public static function fingerprint(string $plaintext): string
+    {
+        $key = sodium_crypto_generichash('btl-cdkey-fingerprint-v1', self::key(), 32);
+        return sodium_crypto_generichash(trim($plaintext), $key, 32);
     }
 }

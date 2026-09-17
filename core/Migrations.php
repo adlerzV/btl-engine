@@ -1,0 +1,126 @@
+<?php
+defined('ABSPATH') || exit;
+
+final class BTL_Migrations
+{
+    private const OPTION = 'btl_schema_version';
+    private const ATTEMPT_OPTION = 'btl_schema_upgrade_attempt';
+    private const RETRY_BACKOFF = 900;
+    private const VERSION = 4;
+
+    public static function boot(): void { add_action('init', [self::class, 'maybe_upgrade'], 4); }
+    public static function maybe_upgrade(): void
+    {
+        if ((int)get_option(self::OPTION, 0) >= self::VERSION) return;
+        $last=(int)get_option(self::ATTEMPT_OPTION, 0);
+        if($last>0 && time()-$last<self::RETRY_BACKOFF)return;
+        update_option(self::ATTEMPT_OPTION,time(),false);
+        self::run_schema_upgrade();
+    }
+
+    public static function run_schema_upgrade(): void
+    {
+        self::cleanup_legacy_scheduler_state();
+        self::prepare_legacy_secure_fields();
+        self::prepare_global_cdkey_uniqueness();
+        $installers=['BTL_Secure_Fields','BTL_Notifications','BTL_Sessions','BTL_Ticket_Replies','BTL_Otp','BTL_CdKey_Stock','BTL_Customer_Orders','BTL_Blog_Follow','BTL_Post_Ratings','BTL_Wishlist_Alerts','BTL_Login_Throttle'];
+        $success=true;
+        foreach($installers as $class){
+            if(!class_exists($class)||!is_callable([$class,'install']))continue;
+            try{
+                global $wpdb;
+                $wpdb->last_error='';
+                $class::install();
+                if($wpdb->last_error!=='')throw new RuntimeException($wpdb->last_error);
+            }catch(Throwable $e){$success=false;BTL_Helpers::logger("Migration: {$class}::install failed: ".$e->getMessage());}
+        }
+        if(class_exists('BTL_Revalidator')&&is_callable(['BTL_Revalidator','install_queue_table'])){
+            try{BTL_Revalidator::install_queue_table();}catch(Throwable $e){$success=false;BTL_Helpers::logger('Migration: revalidation queue failed');}
+        }
+        if($success && !self::backfill_cdkey_fingerprints())$success=false;
+        if($success && !self::backfill_secure_cdkey_fingerprints())$success=false;
+        if(class_exists('BTL_Notifications')&&is_callable(['BTL_Notifications','maybe_add_type_column'])){
+            try{BTL_Notifications::maybe_add_type_column();}catch(Throwable $e){$success=false;BTL_Helpers::logger('Migration: notification type column update failed');}
+        }
+        if($success){update_option(self::OPTION,self::VERSION,false);delete_option(self::ATTEMPT_OPTION);}
+    }
+
+    private static function prepare_legacy_secure_fields(): void
+    {
+        global $wpdb; $table=$wpdb->prefix.'btl_secure_fields';
+        if($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$table))!==$table)return;
+        if(!$wpdb->get_var("SHOW COLUMNS FROM {$table} LIKE 'source_key'"))$wpdb->query("ALTER TABLE {$table} ADD source_key VARCHAR(64) NOT NULL DEFAULT '' AFTER field_type");
+        $wpdb->query("UPDATE {$table} SET source_key=CONCAT('legacy:',id) WHERE source_key='' OR source_key IS NULL");
+    }
+
+    private static function prepare_global_cdkey_uniqueness(): void
+    {
+        global $wpdb;
+        $table=$wpdb->prefix.'btl_cdkey_stock';
+        if($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$table))!==$table)return;
+        $duplicates=$wpdb->get_col("SELECT HEX(key_fingerprint) FROM {$table} WHERE key_fingerprint IS NOT NULL GROUP BY key_fingerprint HAVING COUNT(*)>1");
+        foreach($duplicates?:[] as $hex){
+            $ids=array_map('intval',$wpdb->get_col($wpdb->prepare("SELECT id FROM {$table} WHERE key_fingerprint=UNHEX(%s) ORDER BY id ASC",$hex)));
+            array_shift($ids);
+            foreach($ids as $id){
+                $wpdb->update($table,[
+                    'key_fingerprint'=>null,
+                    'status'=>'duplicate',
+                    'failure_reason'=>'duplicate_plaintext_global',
+                    'failed_at'=>current_time('mysql',true),
+                ],['id'=>$id],['%s','%s','%s','%s'],['%d']);
+            }
+        }
+    }
+
+    private static function backfill_cdkey_fingerprints(): bool
+    {
+        global $wpdb; $table=BTL_CdKey_Stock::table();
+        if($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$table))!==$table)return false;
+        $rows=$wpdb->get_results("SELECT id,product_id,variation_id,ciphertext FROM {$table} WHERE key_fingerprint IS NULL ORDER BY id ASC LIMIT 5000");
+        foreach($rows?:[] as $row){
+            $plain=BTL_Secure_Vault::decrypt((string)$row->ciphertext);
+            if($plain===null){$wpdb->update($table,['status'=>'decrypt_failed','failure_reason'=>'migration_decrypt_failed','failed_at'=>current_time('mysql',true)],['id'=>(int)$row->id]);continue;}
+            try{$fp=BTL_Secure_Vault::fingerprint($plain);}catch(Throwable $e){return false;}
+            $existing=$wpdb->get_var($wpdb->prepare("SELECT id FROM {$table} WHERE key_fingerprint=%s AND id<>%d LIMIT 1",$fp,(int)$row->id));
+            if($existing){$wpdb->update($table,['status'=>'duplicate','failure_reason'=>'duplicate_plaintext','failed_at'=>current_time('mysql',true)],['id'=>(int)$row->id]);continue;}
+            if($wpdb->update($table,['key_fingerprint'=>$fp],['id'=>(int)$row->id],['%s'],['%d'])===false)return false;
+        }
+        $remaining=(int)$wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE key_fingerprint IS NULL AND status NOT IN ('duplicate','decrypt_failed')");
+        return $remaining===0;
+    }
+
+    private static function backfill_secure_cdkey_fingerprints(): bool
+    {
+        global $wpdb;
+        $table=BTL_Secure_Fields::table();
+        if($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$table))!==$table)return false;
+        if(!$wpdb->get_var("SHOW COLUMNS FROM {$table} LIKE 'value_fingerprint'"))return false;
+        $rows=$wpdb->get_results("SELECT id,order_id,item_id,ciphertext FROM {$table} WHERE field_type='cdkey' AND value_fingerprint IS NULL ORDER BY id ASC LIMIT 5000");
+        foreach($rows?:[] as $row){
+            $plain=BTL_Secure_Vault::decrypt((string)$row->ciphertext);
+            if($plain===null){BTL_Helpers::logger("Migration: secure CD key decrypt failed for row {$row->id}");return false;}
+            $fp=BTL_Secure_Vault::fingerprint($plain);
+            $existing=(int)$wpdb->get_var($wpdb->prepare("SELECT id FROM {$table} WHERE value_fingerprint=%s AND id<>%d LIMIT 1",$fp,(int)$row->id));
+            if($existing>0){
+                $wpdb->delete($table,['id'=>(int)$row->id],['%d']);
+                $order=wc_get_order((int)$row->order_id);
+                if($order){
+                    $order->add_order_note('یک CD Key تکراری در migration قرنطینه شد و باید مجدداً تخصیص داده شود.');
+                    if(in_array($order->get_status(),['processing','completed'],true)){
+                        BTL_CdKey_Stock::maybe_assign_on_status_change((int)$row->order_id,$order->get_status(),$order->get_status(),$order);
+                    }
+                }
+                continue;
+            }
+            if($wpdb->update($table,['value_fingerprint'=>$fp],['id'=>(int)$row->id],['%s'],['%d'])===false)return false;
+        }
+        return (int)$wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE field_type='cdkey' AND value_fingerprint IS NULL")===0;
+    }
+
+    private static function cleanup_legacy_scheduler_state(): void
+    {
+        if(function_exists('as_unschedule_all_actions'))foreach(['btl_batch_job','btl_product_chunk_job','btl_cleanup_job'] as $hook)as_unschedule_all_actions($hook,null,'btl');
+        foreach(['btl_batch_lock','btl_batch_changed_ids','btl_batch_mass_change'] as $key)delete_transient($key);
+    }
+}

@@ -25,10 +25,11 @@ final class BTL_Login_Throttle
         $table = self::table();
         $charset = $wpdb->get_charset_collate();
         $sql = "CREATE TABLE {$table} (
-            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             identifier VARCHAR(190) NOT NULL,
             ip_address VARCHAR(45) NOT NULL,
             created_at DATETIME NOT NULL,
+            PRIMARY KEY  (id),
             KEY identifier_created (identifier, created_at)
         ) {$charset};";
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';

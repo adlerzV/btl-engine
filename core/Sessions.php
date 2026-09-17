@@ -5,7 +5,7 @@ use GraphQL\Error\UserError;
 
 final class BTL_Sessions
 {
-    private const READY_OPTION = 'btl_sessions_table_ready';
+    private const READY_OPTION = 'btl_sessions_table_ready_v2';
     private const SESSION_INACTIVITY_DAYS = 30;
 
     public static function table(): string
@@ -18,6 +18,8 @@ final class BTL_Sessions
     {
         add_action('graphql_register_types', [self::class, 'register'], 10);
         add_action('init', [self::class, 'maybe_install'], 5);
+        // Reject bearer-token GraphQL requests unless the token is bound to a live session.
+        add_filter('graphql_request_data', [self::class, 'authorizeGraphqlRequest'], 5, 2);
     }
 
     public static function maybe_install(): void
@@ -31,18 +33,21 @@ final class BTL_Sessions
         $table = self::table();
         $charset = $wpdb->get_charset_collate();
         $sql = "CREATE TABLE {$table} (
-            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             user_id BIGINT UNSIGNED NOT NULL,
             session_id VARCHAR(64) NOT NULL,
             device_label VARCHAR(190) NULL,
             ip_address VARCHAR(45) NULL,
             user_agent VARCHAR(255) NULL,
+            token_hash CHAR(64) NULL,
             revoked TINYINT(1) NOT NULL DEFAULT 0,
             last_active DATETIME NOT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
             UNIQUE KEY user_session (user_id, session_id),
             KEY user_id (user_id),
-            KEY last_active (last_active)
+            KEY last_active (last_active),
+            UNIQUE KEY token_hash (token_hash)
         ) {$charset};";
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
         dbDelta($sql);
@@ -75,7 +80,7 @@ final class BTL_Sessions
             'resolve' => static function ($user, $args) {
                 $currentUserId = get_current_user_id();
                 if (!$currentUserId || $currentUserId !== (int)$user->databaseId) return false;
-                if (empty($args['sessionId'])) return true;
+                if (empty($args['sessionId'])) return false;
                 return self::isValid($currentUserId, (string)$args['sessionId']);
             },
         ]);
@@ -143,52 +148,57 @@ final class BTL_Sessions
     {
         global $wpdb;
         $now = current_time('mysql', true);
-        $sessionId = sanitize_text_field((string)$input['sessionId']);
+        $sessionId = sanitize_text_field((string)($input['sessionId'] ?? ''));
+        $tokenHash = self::currentTokenHash();
+        if ($userId < 1 || !preg_match('/^[A-Za-z0-9_-]{32,128}$/', $sessionId) || $tokenHash === '' || !self::validBootstrapProof($sessionId, $tokenHash)) {
+            throw new RuntimeException('session_binding_required');
+        }
+
+        // A revoked token must never be able to recreate a session. A new token
+        // may bootstrap exactly one session during the post-login handshake.
+        $existing = $wpdb->get_row($wpdb->prepare(
+            "SELECT user_id,session_id,revoked FROM " . self::table() . " WHERE token_hash=%s LIMIT 1",
+            $tokenHash
+        ));
+        if ($wpdb->last_error) throw new RuntimeException('session_lookup_failed');
+        if ($existing && ((int)$existing->revoked !== 0
+            || (int)$existing->user_id !== $userId
+            || (string)$existing->session_id !== $sessionId)) {
+            throw new RuntimeException('session_binding_rejected');
+        }
+
         $deviceLabel = isset($input['deviceLabel']) ? mb_substr(sanitize_text_field((string)$input['deviceLabel']), 0, 190) : null;
         $ipAddress = isset($input['ipAddress']) ? mb_substr(sanitize_text_field((string)$input['ipAddress']), 0, 45) : null;
         $userAgent = isset($input['userAgent']) ? mb_substr(sanitize_text_field((string)$input['userAgent']), 0, 255) : null;
-
         $table = self::table();
-        $sql = "INSERT INTO {$table}
-            (user_id, session_id, device_label, ip_address, user_agent, revoked, last_active, created_at)
-            VALUES (%d, %s, %s, %s, %s, 0, %s, %s)
-            ON DUPLICATE KEY UPDATE
-                device_label = VALUES(device_label),
-                ip_address = VALUES(ip_address),
-                user_agent = VALUES(user_agent),
-                revoked = 0,
-                last_active = VALUES(last_active)";
-
-        $wpdb->query($wpdb->prepare(
-            $sql,
-            $userId,
-            $sessionId,
-            $deviceLabel,
-            $ipAddress,
-            $userAgent,
-            $now,
-            $now
+        $result = $wpdb->query($wpdb->prepare(
+            "INSERT INTO {$table}
+                (user_id,session_id,device_label,ip_address,user_agent,token_hash,revoked,last_active,created_at)
+             VALUES (%d,%s,%s,%s,%s,%s,0,%s,%s)
+             ON DUPLICATE KEY UPDATE
+                device_label=VALUES(device_label), ip_address=VALUES(ip_address),
+                user_agent=VALUES(user_agent), token_hash=VALUES(token_hash),
+                revoked=0, last_active=VALUES(last_active)",
+            $userId, $sessionId, $deviceLabel, $ipAddress, $userAgent, $tokenHash, $now, $now
         ));
+        if ($result === false) throw new RuntimeException('session_write_failed');
     }
 
     public static function touch(int $userId, string $sessionId): void
     {
         global $wpdb;
-        $table = self::table();
+        $tokenHash = self::currentTokenHash();
+        $previousTokenHash = self::previousTokenHash();
         $now = current_time('mysql', true);
-
-        $wpdb->query($wpdb->prepare(
-            "UPDATE {$table} 
-             SET last_active = %s 
-             WHERE user_id = %d 
-               AND session_id = %s 
-               AND revoked = 0 
-               AND last_active < DATE_SUB(%s, INTERVAL 5 MINUTE)",
-            $now,
-            $userId,
-            $sessionId,
-            $now
+        if ($userId < 1 || $tokenHash === '' || $previousTokenHash === '' || !self::sessionExists($userId, $sessionId, true, $previousTokenHash)) {
+            throw new RuntimeException('session_binding_rejected');
+        }
+        $updated = $wpdb->query($wpdb->prepare(
+            "UPDATE " . self::table() . " SET token_hash=%s,last_active=%s
+             WHERE user_id=%d AND session_id=%s AND revoked=0",
+            $tokenHash, $now, $userId, $sessionId
         ));
+        if ($updated === false || $updated < 1) throw new RuntimeException('session_touch_failed');
     }
 
     public static function revoke(int $userId, string $sessionId): void
@@ -232,23 +242,73 @@ final class BTL_Sessions
 
     public static function isValid(int $userId, string $sessionId): bool
     {
+        return self::sessionExists($userId, $sessionId, true);
+    }
+
+    private static function sessionExists(int $userId, string $sessionId, bool $requireToken, ?string $expectedTokenHash = null): bool
+    {
         global $wpdb;
-        $row = $wpdb->get_row($wpdb->prepare(
-            "SELECT revoked FROM " . self::table() . " WHERE user_id=%d AND session_id=%s",
-            $userId,
-            $sessionId
-        ));
-
-        if ($wpdb->last_error) {
-            BTL_Helpers::logger('Sessions::isValid DB error: ' . $wpdb->last_error);
-            return true;
+        $sql = "SELECT revoked,token_hash FROM " . self::table() . " WHERE user_id=%d AND session_id=%s LIMIT 1";
+        $args = [$userId, $sessionId];
+        if ($requireToken) {
+            $sql = "SELECT revoked,token_hash FROM " . self::table() . " WHERE user_id=%d AND session_id=%s AND token_hash=%s LIMIT 1";
+            $args[] = $expectedTokenHash ?: self::currentTokenHash();
         }
+        $row = $wpdb->get_row($wpdb->prepare($sql, ...$args));
+        if ($wpdb->last_error || !$row) return false;
+        return (int)$row->revoked === 0 && (!$requireToken || (string)$row->token_hash !== '');
+    }
 
-        if (!$row) {
-            return true;
+    private static function currentTokenHash(): string
+    {
+        $authorization = (string)($_SERVER['HTTP_AUTHORIZATION'] ?? '');
+        if (!preg_match('/^Bearer\s+(.+)$/i', $authorization, $m)) return '';
+        $token = trim($m[1]);
+        return $token === '' ? '' : hash('sha256', $token);
+    }
+
+    private static function requestSessionId(): string
+    {
+        return sanitize_text_field((string)($_SERVER['HTTP_X_BTL_SESSION_ID'] ?? ''));
+    }
+
+    private static function previousTokenHash(): string
+    {
+        $authorization = (string)($_SERVER['HTTP_X_BTL_PREVIOUS_AUTHORIZATION'] ?? '');
+        if (!preg_match('/^Bearer\s+(.+)$/i', $authorization, $m)) return '';
+        $token = trim($m[1]);
+        return $token === '' ? '' : hash('sha256', $token);
+    }
+
+    private static function validBootstrapProof(string $sessionId, string $tokenHash): bool
+    {
+        if (!defined('BTL_SESSION_BINDING_SECRET') || BTL_SESSION_BINDING_SECRET === '') return false;
+        $provided = (string)($_SERVER['HTTP_X_BTL_SESSION_BOOTSTRAP'] ?? '');
+        if ($provided === '') return false;
+        $expected = hash_hmac('sha256', $sessionId . '.' . $tokenHash, BTL_SESSION_BINDING_SECRET);
+        return hash_equals($expected, $provided);
+    }
+
+    public static function authorizeGraphqlRequest($requestData, $request = null)
+    {
+        if (!is_array($requestData)) return $requestData;
+        $query = (string)($requestData['query'] ?? '');
+        $tokenHash = self::currentTokenHash();
+        if ($tokenHash === '' || trim($query) === '') return $requestData;
+
+        // The post-login bootstrap binds the freshly issued token. Refresh must
+        // bind the rotated token before any other operation can use it. Do not
+        // allow a bootstrap field to be combined with customer/order fields.
+        $bootstrapOnly = preg_match('/\b(?:registerSession|touchSession)\b/i', $query)
+            && !preg_match('/\b(?:customer|viewer|user|orders|order|lineItems|downloadableItems|myTickets|myTicket|myReviews|notifications|sessions|wishlistIds|paymentUrl|submitCustomerOrder|revealOrderSecret|adminOpenTickets|adminOpenTicketsCount|pendingReviewsCount|toggleWishlistItem|updateCustomerProfile|updateUserAvatar|setPassword|replyToSupportTicket|submitSupportTicket|writeReview|editMyReview|deleteMyReview|writeBlogComment|replyToBlogComment|rateBlogPost|followBlogCategory|unfollowBlogCategory)\b/i', $query);
+        if ($bootstrapOnly) return $requestData;
+
+        if (!self::sessionExists(get_current_user_id(), self::requestSessionId(), true)) {
+            // Keep the request syntactically valid but guaranteed to fail GraphQL
+            // validation, so no resolver (including customer/order resolvers) runs.
+            $requestData['query'] = 'query BtlSessionDenied { __btl_session_denied__ }';
         }
-
-        return (int)$row->revoked === 0;
+        return $requestData;
     }
 
     public static function listSessions(int $userId): array

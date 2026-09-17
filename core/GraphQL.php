@@ -150,6 +150,17 @@ final class BTL_GraphQL
         BTL_Cache::flushGroup('btl_regions');
     }
 
+    private static function safe_public_link($value): string
+    {
+        $value = trim((string) $value);
+        if ($value === '' || preg_match('/^\s*(?:javascript|data|vbscript):/i', $value)) {
+            return '';
+        }
+
+        // Preserve relative site links and permit only normal web schemes.
+        return esc_url_raw($value, ['http', 'https']);
+    }
+
     public static function register(): void
     {
         BTL_GraphQL::register_objects();
@@ -477,7 +488,7 @@ final class BTL_GraphQL
                     $formatted_banners[] = [
                         'title'       => $item['title'] ?? '',
                         'subtitle'    => $item['subtitle'] ?? '',
-                        'link'        => $item['link'] ?? '',
+                        'link'        => self::safe_public_link($item['link'] ?? ''),
                         'imageUrl'    => $imageUrl,
                         'secondimage' => $secondimage,
                         'image'       => $item['image'] ?? null,
@@ -544,7 +555,7 @@ final class BTL_GraphQL
                         'heading'     => $item['heading'] ?? '',
                         'description' => $item['description'] ?? '',
                         'ctaText'     => $item['cta_text'] ?? '',
-                        'ctaLink'     => $item['cta_link'] ?? '',
+                        'ctaLink'     => self::safe_public_link($item['cta_link'] ?? ''),
                         'imageUrl'    => $imageUrl,
                     ];
                 }
@@ -600,6 +611,14 @@ final class BTL_GraphQL
                     return null;
                 }
 
+                // Payment URLs contain the order key and are bearer capabilities.
+                $viewerId = get_current_user_id();
+                if (!$viewerId
+                    || ((int) $wc_order->get_customer_id() !== $viewerId
+                        && !current_user_can('manage_woocommerce'))) {
+                    return null;
+                }
+
                 return $wc_order->get_checkout_payment_url();
             },
         ]);
@@ -625,7 +644,7 @@ final class BTL_GraphQL
                 $itemId = (int)$input['itemId'];
                 $fieldType = sanitize_text_field($input['fieldType']);
 
-                $allowedFields = ['cdkey', 'email', 'password', 'battletag'];
+                $allowedFields = ['cdkey'];
 
                 if (!in_array($fieldType, $allowedFields, true)) {
                     throw new GraphQL\Error\UserError('این نوع فیلد از این مسیر قابل دسترسی نیست.');
@@ -645,8 +664,10 @@ final class BTL_GraphQL
 
                 $blockedStatuses = ['cancelled', 'refunded', 'failed'];
 
-                if (in_array($order->get_status(), $blockedStatuses, true)) {
-                    throw new GraphQL\Error\UserError('این سفارش لغو یا بازگشت داده شده است.');
+                // CD keys must not be disclosed while an order is still pending/on-hold.
+                if (in_array($order->get_status(), $blockedStatuses, true)
+                    || !in_array($order->get_status(), ['processing', 'completed'], true)) {
+                    throw new GraphQL\Error\UserError('این سفارش هنوز آماده تحویل نیست.');
                 }
 
                 $item = WC_Order_Factory::get_order_item($itemId);
@@ -655,28 +676,18 @@ final class BTL_GraphQL
                     throw new GraphQL\Error\UserError('آیتم نامعتبر است.');
                 }
 
-                if ($fieldType === 'cdkey') {
-                    $values = BTL_Secure_Fields::revealAllForCustomerCdKey($orderId, $itemId, $currentUserId);
-
-                    if (empty($values)) {
-                        throw new GraphQL\Error\UserError('کد هنوز آماده نشده است، کمی بعد دوباره تلاش کنید.');
-                    }
-
-                    return ['values' => $values];
+                if ($item->get_meta('روش تحویل') !== 'code') {
+                    throw new GraphQL\Error\UserError('این آیتم تحویل کد ندارد.');
                 }
-
-                $value = BTL_Secure_Fields::revealForStaff(
-                    $orderId,
-                    $itemId,
-                    $fieldType,
-                    $currentUserId
-                );
-
-                if ($value === null) {
-                    throw new GraphQL\Error\UserError('اطلاعاتی یافت نشد (ممکن است سفارش تکمیل شده و اطلاعات پاک شده باشد).');
+                $needed = max(1, (int) $item->get_quantity());
+                if (BTL_Secure_Fields::countByOrderItem($orderId, $itemId, 'cdkey') < $needed) {
+                    throw new GraphQL\Error\UserError('کد هنوز کامل آماده نشده است، کمی بعد دوباره تلاش کنید.');
                 }
-
-                return ['values' => [$value]];
+                $values = BTL_Secure_Fields::revealAllForCustomerCdKey($orderId, $itemId, $currentUserId);
+                if (count($values) !== $needed) {
+                    throw new GraphQL\Error\UserError('کد هنوز کامل آماده نشده است، کمی بعد دوباره تلاش کنید.');
+                }
+                return ['values' => $values];
             },
         ]);
     }
@@ -974,7 +985,12 @@ final class BTL_GraphQL
                 update_post_meta($postId, 'ticket_status', 'open');
 
                 if (!empty($input['linkedOrderId'])) {
-                    update_post_meta($postId, 'linked_order_id', (int)$input['linkedOrderId']);
+                    $linkedOrder = wc_get_order((int) $input['linkedOrderId']);
+                    if (!$linkedOrder || (int) $linkedOrder->get_customer_id() !== $userId) {
+                        wp_delete_post($postId, true);
+                        throw new GraphQL\Error\UserError('سفارش مرتبط متعلق به شما نیست.');
+                    }
+                    update_post_meta($postId, 'linked_order_id', (int) $linkedOrder->get_id());
                 }
 
                 return ['ticketId' => $postId];

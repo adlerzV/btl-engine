@@ -5,6 +5,7 @@ defined('ABSPATH') || exit;
 final class BTL_Price_Engine
 {
     private static array $running = [];
+    private static ?array $memoryRates = null;
 
     public static function boot(): void
     {
@@ -32,7 +33,8 @@ final class BTL_Price_Engine
 
     public static function calculate(
         int $product_id,
-        bool $notify = true
+        bool $notify = true,
+        ?array $currencies = null
     ): bool {
         if (isset(self::$running[$product_id])) {
             return false;
@@ -79,9 +81,21 @@ final class BTL_Price_Engine
                 );
             }
 
+            $currencies = self::normalize_currencies($currencies);
+
             $items = $product->is_type('variable')
                 ? $product->get_children()
                 : [$product_id];
+
+            if ($currencies !== null && $product->is_type('variable')) {
+                $items = array_values(array_filter(
+                    $items,
+                    static function ($item_id) use ($currencies): bool {
+                        $currency = strtoupper((string) get_post_meta((int) $item_id, 'base_currency_type', true));
+                        return in_array($currency, $currencies, true);
+                    }
+                ));
+            }
 
             $changed = false;
 
@@ -91,6 +105,17 @@ final class BTL_Price_Engine
                 );
 
                 if (!$variation) {
+                    continue;
+                }
+
+                if (
+                    $currencies !== null &&
+                    !in_array(
+                        strtoupper((string) $variation->get_meta('base_currency_type')),
+                        $currencies,
+                        true
+                    )
+                ) {
                     continue;
                 }
 
@@ -114,6 +139,21 @@ final class BTL_Price_Engine
             }
 
             if ($changed) {
+                clean_post_cache($product_id);
+
+                // Skipped inside a batch: the scheduler flushes the product
+                // transient group once per worker instead of once per product.
+                if (
+                    function_exists('wc_delete_product_transients')
+                    && !(
+                        class_exists('BTL_Invalidation')
+                        && is_callable(['BTL_Invalidation', 'is_suspended'])
+                        && BTL_Invalidation::is_suspended()
+                    )
+                ) {
+                    wc_delete_product_transients($product_id);
+                }
+
                 wp_cache_delete(
                     "variations_{$product_id}",
                     'btl'
@@ -146,6 +186,23 @@ final class BTL_Price_Engine
             );
         }
     }
+    private static function normalize_currencies(?array $currencies): ?array
+    {
+        if ($currencies === null) {
+            return null;
+        }
+
+        $currencies = array_values(array_unique(array_filter(
+            array_map(
+                static fn($value): string => strtoupper(trim((string) $value)),
+                $currencies
+            ),
+            static fn(string $value): bool => $value !== ''
+        )));
+
+        return $currencies;
+    }
+
     private static function process_variation(
         WC_Product $variation,
         array $rates
@@ -547,51 +604,36 @@ final class BTL_Price_Engine
 
     public static function rates(): array
     {
-        $cached =
-            wp_cache_get(
-                'rates',
-                'btl'
-            );
-
-        if ($cached !== false) {
-            return $cached;
+        if (self::$memoryRates !== null) {
+            return self::$memoryRates;
         }
 
-        $settings =
-            get_option(
-                'site-settings',
-                []
-            );
+        $cached = wp_cache_get('rates', 'btl');
+        if ($cached !== false && is_array($cached)) {
+            self::$memoryRates = $cached;
+            return self::$memoryRates;
+        }
+
+        $settings = get_option('site-settings', []);
 
         $rates = [
-            'USD'   => self::money(
-                $settings['usd_to_toman_rate'] ?? 0
-            ),
-            'EUR'   => self::money(
-                $settings['eur_to_toman_rate'] ?? 0
-            ),
-            'TRY'   => self::money(
-                $settings['try_to_toman_rate'] ?? 0
-            ),
-            'UAH'   => self::money(
-                $settings['uah_to_toman_rate'] ?? 0
-            ),
-            'USD_R' => self::money(
-                $settings['usd_to_toman_rate_r'] ?? 0
-            ),
-            'EUR_R' => self::money(
-                $settings['eur_to_toman_rate_r'] ?? 0
-            ),
+            'USD'   => self::money($settings['usd_to_toman_rate'] ?? 0),
+            'EUR'   => self::money($settings['eur_to_toman_rate'] ?? 0),
+            'TRY'   => self::money($settings['try_to_toman_rate'] ?? 0),
+            'UAH'   => self::money($settings['uah_to_toman_rate'] ?? 0),
+            'USD_R' => self::money($settings['usd_to_toman_rate_r'] ?? 0),
+            'EUR_R' => self::money($settings['eur_to_toman_rate_r'] ?? 0),
         ];
 
-        wp_cache_set(
-            'rates',
-            $rates,
-            'btl',
-            60
-        );
+        wp_cache_set('rates', $rates, 'btl', 60);
+        self::$memoryRates = $rates;
 
-        return $rates;
+        return self::$memoryRates;
+    }
+
+    public static function clearMemoryRates(): void
+    {
+        self::$memoryRates = null;
     }
 
     public static function money(

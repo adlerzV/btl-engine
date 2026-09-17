@@ -49,7 +49,7 @@ final class BTL_Notifications
         $charset = $wpdb->get_charset_collate();
 
         $sql = "CREATE TABLE {$table} (
-            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             user_id BIGINT UNSIGNED NOT NULL,
             type VARCHAR(20) NOT NULL DEFAULT 'engagement',
             title VARCHAR(190) NOT NULL,
@@ -57,6 +57,7 @@ final class BTL_Notifications
             link VARCHAR(190) NULL,
             is_read TINYINT(1) NOT NULL DEFAULT 0,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
             KEY user_id (user_id, is_read),
             KEY user_type (user_id, type)
         ) {$charset};";
@@ -97,10 +98,10 @@ final class BTL_Notifications
         string $body,
         ?string $link = null,
         string $type = 'engagement'
-    ): void {
+    ): bool {
         global $wpdb;
 
-        $wpdb->insert(
+        $inserted = $wpdb->insert(
             self::table(),
             [
                 'user_id' => $userId,
@@ -110,11 +111,16 @@ final class BTL_Notifications
                 'link' => $link,
             ]
         );
+        if ($inserted === false) {
+            BTL_Helpers::logger("Notifications: insert failed for user {$userId}");
+            return false;
+        }
 
         self::trimOldForUser(
             $userId,
             $type
         );
+        return true;
     }
 
     public static function forUser(
@@ -155,12 +161,20 @@ final class BTL_Notifications
             return;
         }
 
-        self::push(
+        // WooCommerce status callbacks can be replayed by payment/webhook
+        // integrations. add_post_meta(..., true) is a DB uniqueness claim, so
+        // only one replay emits the customer notification.
+        if (!add_post_meta($orderId, '_btl_completed_notification_sent', gmdate('c'), true)) {
+            return;
+        }
+
+        $sent = self::push(
             (int) $order->get_customer_id(),
             'سفارش شما تحویل داده شد 🎉',
             "سفارش #{$order->get_order_number()} با موفقیت تکمیل شد.",
             '/my-account/orders'
         );
+        if (!$sent) delete_post_meta($orderId, '_btl_completed_notification_sent');
     }
 
     private static function trimOldForUser(

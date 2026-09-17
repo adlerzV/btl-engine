@@ -32,7 +32,7 @@ final class BTL_Otp
         $table = self::table();
         $charset = $wpdb->get_charset_collate();
         $sql = "CREATE TABLE {$table} (
-            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             identifier VARCHAR(190) NOT NULL,
             channel VARCHAR(10) NOT NULL DEFAULT 'sms',
             purpose VARCHAR(30) NOT NULL DEFAULT 'login_register',
@@ -42,6 +42,7 @@ final class BTL_Otp
             expires_at DATETIME NOT NULL,
             consumed_at DATETIME NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
             KEY identifier_purpose (identifier, purpose),
             KEY created_at (created_at)
         ) {$charset};";

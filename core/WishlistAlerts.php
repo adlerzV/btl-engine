@@ -24,11 +24,12 @@ final class BTL_Wishlist_Alerts
         $table = self::table();
         $charset = $wpdb->get_charset_collate();
         $sql = "CREATE TABLE {$table} (
-            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             user_id BIGINT UNSIGNED NOT NULL,
             product_id BIGINT UNSIGNED NOT NULL,
             price DECIMAL(15,2) NOT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
             UNIQUE KEY user_product (user_id, product_id),
             KEY product_id (product_id)
         ) {$charset};";

@@ -8,6 +8,7 @@ final class BTL_CdKey_Admin
         add_action('woocommerce_variation_options_pricing', [self::class, 'render_stock_box'], 20, 3);
         add_action('wp_ajax_btl_cdkey_bulk_add', [self::class, 'ajax_bulk_add']);
         add_action('admin_footer-post.php', [self::class, 'inline_admin_script']);
+        add_action('admin_footer-post-new.php', [self::class, 'inline_admin_script']);
     }
 
     public static function render_stock_box($loop, $variation_data, $variation): void
@@ -41,11 +42,15 @@ final class BTL_CdKey_Admin
         $productId = absint($_POST['product_id'] ?? 0);
         $raw = (string) ($_POST['keys'] ?? '');
 
-        if (!$variationId || !$productId || trim($raw) === '') wp_send_json_error('ورودی نامعتبر', 400);
+        if (!$variationId || !$productId || trim($raw) === '' || strlen($raw) > 1048576) wp_send_json_error('ورودی نامعتبر', 400);
         if (!wp_verify_nonce($_POST['nonce'] ?? '', 'btl_cdkey_stock_' . $variationId)) wp_send_json_error('نشست نامعتبر', 403);
+        $variation = wc_get_product($variationId);
+        if (!$variation instanceof WC_Product_Variation || (int) $variation->get_parent_id() !== $productId || get_post_status($productId) !== 'publish') {
+            wp_send_json_error('تنوع محصول نامعتبر است.', 400);
+        }
 
         $lines = preg_split('/\r\n|\r|\n/', $raw) ?: [];
-        $sanitized = array_map('sanitize_text_field', $lines);
+        $sanitized = array_map(static fn($line) => trim((string) wp_unslash($line)), $lines);
 
         $added = BTL_CdKey_Stock::bulkAdd($productId, $variationId, $sanitized, get_current_user_id());
         $newCount = BTL_CdKey_Stock::availableCount($productId, $variationId);
@@ -82,6 +87,9 @@ final class BTL_CdKey_Admin
                     } else {
                         box.find('.btl-cdkey-bulk-result').text(res.data).css('color', '#d63638');
                     }
+                }).fail(function () {
+                    btn.prop('disabled', false);
+                    box.find('.btl-cdkey-bulk-result').text('خطا در ارتباط با سرور').css('color', '#d63638');
                 });
             });
         });

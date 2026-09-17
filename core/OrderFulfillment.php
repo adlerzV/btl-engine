@@ -17,6 +17,7 @@ final class BTL_Order_Fulfillment
         add_action('wp_ajax_btl_reveal_credential', [self::class, 'ajax_reveal_credential']);
         add_action('wp_ajax_btl_update_fulfillment_status', [self::class, 'ajax_update_fulfillment_status']);
         add_action('admin_footer-post.php', [self::class, 'inline_admin_script']);
+        add_action('admin_footer-post-new.php', [self::class, 'inline_admin_script']);
     }
 
     public static function render_admin_fields($item_id, $item, $product): void
@@ -79,9 +80,9 @@ final class BTL_Order_Fulfillment
         $item = WC_Order_Factory::get_order_item($itemId);
         if (!$item || (int)$item->get_order_id() !== $orderId) wp_send_json_error('آیتم نامعتبر', 404);
 
-        $item->update_meta_data('_secure_cdkey', $key);
-        $item->save();
-
+        if (!BTL_CdKey_Stock::storeManualAssignment($orderId, $itemId, $key)) {
+            wp_send_json_error('کد ذخیره نشد؛ ظرفیت آیتم تکمیل است یا کد تکراری است.', 409);
+        }
         wp_send_json_success(['message' => 'کد با موفقیت رمزنگاری و ذخیره شد.']);
     }
 
@@ -126,23 +127,39 @@ final class BTL_Order_Fulfillment
         if (!$item || (int)$item->get_order_id() !== $orderId) {
             wp_send_json_error('آیتم نامعتبر', 404);
         }
+        $order = wc_get_order($orderId);
+        if (!$order || in_array($order->get_status(), ['cancelled', 'failed', 'refunded', 'trash'], true)) {
+            wp_send_json_error('این سفارش دیگر قابل تحویل نیست.', 409);
+        }
 
         $previousStatus = $item->get_meta('_fulfillment_status') ?: 'queued';
+        $rank = ['queued'=>0, 'logging_in'=>1, 'processing'=>2, 'completed'=>3];
+        if ($rank[$status] < $rank[$previousStatus]) {
+            wp_send_json_error('بازگرداندن وضعیت تحویل به عقب مجاز نیست.', 409);
+        }
+        if ($status === $previousStatus) {
+            wp_send_json_success(['status' => $status]);
+        }
 
         $item->update_meta_data('_fulfillment_status', $status);
         $item->save();
 
         if ($status === 'completed' && $previousStatus !== 'completed') {
-            $order = wc_get_order($orderId);
+            // Concurrent/replayed admin requests must not emit duplicate
+            // fulfillment notifications for the same item.
+            if (!add_metadata('order_item', $itemId, '_btl_completion_notification_sent', 'yes', true)) {
+                wp_send_json_success(['status' => $status]);
+            }
             $customerId = $order ? (int)$order->get_customer_id() : 0;
             if ($customerId) {
-                BTL_Notifications::push(
+                $sent = BTL_Notifications::push(
                     $customerId,
                     'تحویل سفارش شما تکمیل شد ✅',
                     sprintf('آیتم «%s» از سفارش شما آماده و تحویل داده شد.', $item->get_name()),
                     '/my-account/orders',
                     'order'
                 );
+                if (!$sent) delete_metadata('order_item', $itemId, '_btl_completion_notification_sent');
             }
         }
 

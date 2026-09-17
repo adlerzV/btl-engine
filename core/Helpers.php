@@ -106,7 +106,12 @@ final class BTL_Helpers
         }
 
         try {
+            global $wpdb;
+            $wpdb->last_error = '';
             $installer();
+            if ($wpdb->last_error !== '') {
+                throw new RuntimeException($wpdb->last_error);
+            }
             update_option(
                 $readyOption,
                 '1',

@@ -33,6 +33,7 @@ final class BTL_Invalidation
     private static array $pinnedScopes = [];
 
     private static array $pendingChanges = [];
+    private static array $acfChanges = [];
 
     private static array $deferred = [];
     private static bool $suspended = false;
@@ -53,6 +54,7 @@ final class BTL_Invalidation
         add_action('edited_term', [self::class, 'on_term_changed'], 20, 3);
         add_action('delete_term', [self::class, 'on_term_deleted'], 20, 4);
 
+        add_action('acf/update_value', [self::class, 'capture_acf_change'], 5, 4);
         add_action('acf/save_post', [self::class, 'on_acf_save'], 25, 1);
     }
 
@@ -154,6 +156,11 @@ final class BTL_Invalidation
     public static function unpin_scope(int $productId): void
     {
         unset(self::$pinnedScopes[$productId]);
+    }
+
+    public static function is_suspended(): bool
+    {
+        return self::$suspended;
     }
 
     public static function suspend(): void
@@ -281,7 +288,9 @@ final class BTL_Invalidation
     {
         if (is_numeric($postId)) {
             if (get_post_type((int) $postId) === 'product') {
-                self::queueProduct((int) $postId, self::SCOPE_ALL);
+                $product_id = (int) $postId;
+                self::queueProduct($product_id, self::scopeFromAcfFields($product_id));
+                unset(self::$acfChanges[$product_id]);
             }
 
             return;
@@ -302,6 +311,63 @@ final class BTL_Invalidation
         if (preg_match('/^([a-z0-9_\-]+)_(\d+)$/i', $raw, $m) && taxonomy_exists($m[1])) {
             self::queueTerm((int) $m[2], $m[1]);
         }
+    }
+
+    public static function capture_acf_change($value, $postId, $field, $original = null): void
+    {
+        if (!is_numeric($postId) || get_post_type((int) $postId) !== 'product') {
+            return;
+        }
+
+        $fieldName = is_array($field) ? (string) ($field['name'] ?? '') : '';
+        if ($fieldName !== '') {
+            self::$acfChanges[(int) $postId][] = $fieldName;
+        }
+    }
+
+    private static function scopeFromAcfFields(int $productId): string
+    {
+        if (!array_key_exists($productId, self::$acfChanges)) {
+            return self::SCOPE_ALL;
+        }
+
+        $pricing = [
+            'base_currency_type',
+            'base_foreign_price',
+            'base_foreign_sale_price',
+            'priority_foreign_sale_price',
+            'foreign_sale_price_dates_from',
+            'foreign_sale_price_dates_to',
+            'gift_foreign_price_diff',
+            'code_foreign_price_diff',
+            '_gift_price_toman',
+            '_code_price_toman',
+        ];
+        $content = [
+            'short-notify',
+            'short_notify',
+            'secondary_gallery',
+            'content_matrix',
+            'description',
+        ];
+
+        $hasPricing = false;
+        $hasContent = false;
+        foreach (array_unique(self::$acfChanges[$productId]) as $field) {
+            if (in_array($field, $pricing, true)) {
+                $hasPricing = true;
+            } elseif (in_array($field, $content, true)) {
+                $hasContent = true;
+            } else {
+                // Unknown fields remain conservative to preserve invalidation coverage.
+                return self::SCOPE_ALL;
+            }
+        }
+
+        if ($hasPricing && $hasContent) {
+            return self::SCOPE_ALL;
+        }
+        return $hasPricing ? self::SCOPE_PRICING : self::SCOPE_CONTENT;
     }
 
     private static function scopeFromChanges(int $productId): string
@@ -503,6 +569,15 @@ final class BTL_Invalidation
     private static function bustObjectCache(int $productId, array $parts): void
     {
         if (in_array(self::SCOPE_PRICING, $parts, true)) {
+            clean_post_cache($productId);
+
+            // During a batch the whole WooCommerce product transient group is
+            // flushed once per worker. Doing it per product here would bump the
+            // global WC cache version on every single product.
+            if (!self::$suspended && function_exists('wc_delete_product_transients')) {
+                wc_delete_product_transients($productId);
+            }
+
             wp_cache_delete("variations_{$productId}", 'btl');
         }
 

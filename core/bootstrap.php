@@ -19,6 +19,7 @@ function btl_autoload_core_class(string $class): void
             'BTL_Content_Matrix' => 'ContentMatrix.php',
             'BTL_Scheduler' => 'Scheduler.php',
             'BTL_Revalidator' => 'Revalidator.php',
+            'BTL_Migrations' => 'Migrations.php',
             'BTL_Admin' => 'Admin.php',
             'BTL_Secure_Vault' => 'SecureVault.php',
             'BTL_Secure_Fields' => 'SecureFields.php',
@@ -67,6 +68,7 @@ function btl_autoload_core_class(string $class): void
 spl_autoload_register('btl_autoload_core_class');
 
 BTL_Region_Taxonomy::boot();
+BTL_Migrations::boot();
 BTL_Revalidator::boot();
 BTL_Invalidation::boot();
 BTL_Price_Engine::boot();
@@ -85,6 +87,7 @@ BTL_Customer_Reviews::boot();
 BTL_Review_Moderation::boot();
 BTL_Avatar_Guard::boot();
 BTL_CdKey_Stock::boot();
+BTL_Customer_Orders::boot();
 BTL_Blog_Follow::boot();
 BTL_Post_Ratings::boot();
 BTL_Otp::boot();
@@ -118,10 +121,3 @@ add_action(
     10
 );
 
-add_action(
-    'graphql_register_types',
-    static function (): void {
-        BTL_Customer_Orders::register();
-    },
-    10
-);
