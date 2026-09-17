@@ -266,12 +266,14 @@ final class BTL_Revalidator
 
         if ($code < 200 || $code >= 300) {
             BTL_Helpers::logger(
-                'Revalidator: HTTP ' . $code . ' — ' .
-                wp_remote_retrieve_body($response)
+                'Revalidator: HTTP ' . $code . ' — ' . wp_remote_retrieve_body($response)
             );
-
             return false;
         }
+
+        BTL_Helpers::logger(
+            'Revalidator: ارسال موفق ' . count($tags) . ' تگ — ' . implode(', ', $tags)
+        );
 
         return true;
     }

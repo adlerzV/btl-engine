@@ -23,8 +23,8 @@ final class BTL_Scheduler
         );
 
         add_action(
-            'updated_option_site-settings',
-            [self::class, 'trigger_mass_update'],
+            'update_option_site-settings',
+            [self::class, 'on_site_settings_updated'],
             10
         );
 
@@ -34,25 +34,14 @@ final class BTL_Scheduler
             10
         );
 
-        add_action(
-            'btl_batch_job',
-            [self::class, 'batch_job'],
-            10,
-            2
-        );
+        add_action('btl_batch_job', [self::class, 'batch_job'], 10, 2);
+        add_action('btl_product_chunk_job', [self::class, 'process_chunk'], 10, 1);
+        add_action('btl_cleanup_job', [self::class, 'cleanup'], 10);
+    }
 
-        add_action(
-            'btl_product_chunk_job',
-            [self::class, 'process_chunk'],
-            10,
-            1
-        );
-
-        add_action(
-            'btl_cleanup_job',
-            [self::class, 'cleanup'],
-            10
-        );
+    public static function on_site_settings_updated(): void
+    {
+        self::schedule();
     }
 
     public static function trigger_mass_update(

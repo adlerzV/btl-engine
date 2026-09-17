@@ -33,13 +33,12 @@ final class BTL_Rate_Sync
         );
 
         add_action(
-            'updated_option_' . self::OPTION_KEY,
+            'update_option_' . self::OPTION_KEY,
             [self::class, 'maybe_reschedule'],
             10,
-            3
+            2
         );
     }
-
     public static function activate(): void
     {
         if (self::schedule(self::interval_hours(), true)) {
@@ -126,19 +125,14 @@ final class BTL_Rate_Sync
 
     public static function maybe_reschedule(
         $old_value,
-        $new_value,
-        $option
+        $new_value
     ): void {
         $oldHours = self::extract_interval(
-            is_array($old_value)
-                ? $old_value
-                : []
+            is_array($old_value) ? $old_value : []
         );
 
         $newHours = self::extract_interval(
-            is_array($new_value)
-                ? $new_value
-                : []
+            is_array($new_value) ? $new_value : []
         );
 
         if ($oldHours === $newHours) {
@@ -146,19 +140,11 @@ final class BTL_Rate_Sync
         }
 
         if (function_exists('as_unschedule_all_actions')) {
-            as_unschedule_all_actions(
-                self::HOOK,
-                [],
-                self::GROUP
-            );
+            as_unschedule_all_actions(self::HOOK, [], self::GROUP);
         }
 
         if (self::schedule($newHours, true)) {
-            update_option(
-                self::HEALTH_CHECK_OPTION,
-                time(),
-                true
-            );
+            update_option(self::HEALTH_CHECK_OPTION, time(), true);
         }
     }
 
