@@ -299,8 +299,6 @@ final class BTL_CdKey_Stock
         global $wpdb;
         $wpdb->query('START TRANSACTION');
         try {
-            // Serialize manual assignments for this line item. The count check
-            // alone permits two concurrent admins to exceed the line quantity.
             $lockedItem = $wpdb->get_var($wpdb->prepare(
                 "SELECT order_item_id FROM {$wpdb->prefix}woocommerce_order_items WHERE order_item_id=%d FOR UPDATE",
                 $itemId
@@ -309,22 +307,36 @@ final class BTL_CdKey_Stock
             if (BTL_Secure_Fields::countByOrderItem($orderId, $itemId, 'cdkey') >= max(1, (int)$item->get_quantity())) {
                 throw new RuntimeException('item_capacity_reached');
             }
+
             try { $fingerprint = BTL_Secure_Vault::fingerprint($plaintext); }
             catch (Throwable $e) { throw new RuntimeException('fingerprint_failed'); }
+
+            $variationId = (int)$item->get_variation_id();
+            $product = $item->get_product();
+            $productId = $variationId ? (int)($product ? $product->get_parent_id() : 0) : (int)$item->get_product_id();
+            if ($productId < 1) throw new RuntimeException('product_resolution_failed');
+
             $stock = $wpdb->get_row($wpdb->prepare(
                 "SELECT * FROM " . self::table() . " WHERE key_fingerprint=%s LIMIT 1 FOR UPDATE",
                 $fingerprint
             ));
+
             if ($stock) {
-                $variationId = (int)$item->get_variation_id();
-                $productId = $variationId ? (int)$item->get_product()->get_parent_id() : (int)$item->get_product_id();
                 if ((int)$stock->product_id !== $productId || (int)$stock->variation_id !== $variationId) {
                     throw new RuntimeException('key_belongs_to_another_product');
                 }
+
                 $sameAssignment = (int)$stock->order_id === $orderId && (int)$stock->item_id === $itemId;
+
+                if ((string)$stock->status === 'used' && $sameAssignment) {
+                    $wpdb->query('COMMIT');
+                    return true;
+                }
+
                 if (!in_array((string)$stock->status, ['available', 'reserved'], true) || ((string)$stock->status === 'reserved' && !$sameAssignment)) {
                     throw new RuntimeException('key_already_consumed');
                 }
+
                 $source = 'stock:' . (int)$stock->id;
                 if (!BTL_Secure_Fields::store($orderId, $itemId, 'cdkey', $plaintext, $source)) {
                     throw new RuntimeException('secure_store_failed');
@@ -336,7 +348,25 @@ final class BTL_CdKey_Stock
                 );
                 if ($updated === false) throw new RuntimeException('stock_update_failed');
             } else {
-                $source = 'manual:' . substr(bin2hex($fingerprint), 0, 57);
+                $ciphertext = BTL_Secure_Vault::encrypt($plaintext);
+                $inserted = $wpdb->insert(self::table(), [
+                    'product_id'      => $productId,
+                    'variation_id'    => $variationId,
+                    'ciphertext'      => $ciphertext,
+                    'key_fingerprint' => $fingerprint,
+                    'status'          => 'used',
+                    'order_id'        => $orderId,
+                    'item_id'         => $itemId,
+                    'added_by'        => get_current_user_id() ?: null,
+                    'used_at'         => current_time('mysql', true),
+                ], ['%d','%d','%s','%s','%s','%d','%d','%d','%s']);
+
+                if ($inserted === false) {
+
+                    throw new RuntimeException('key_already_consumed');
+                }
+
+                $source = 'stock:' . (int)$wpdb->insert_id;
                 if (!BTL_Secure_Fields::store($orderId, $itemId, 'cdkey', $plaintext, $source)) {
                     throw new RuntimeException('secure_store_failed');
                 }
