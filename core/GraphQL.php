@@ -1128,7 +1128,10 @@ final class BTL_GraphQL
             'price'                 => (string)$variation->get_price(),
             'regularPrice'          => (string)$variation->get_regular_price(),
             'salePrice'             => (string)$variation->get_sale_price(),
-            'imageUrl'              => BTL_GraphQL::image_url($variation->get_image_id()),
+            'imageUrl'              => (function () use ($variation) {
+                $ownImageId = (int) $variation->get_meta('_thumbnail_id');
+                return $ownImageId ? BTL_GraphQL::image_url($ownImageId) : '';
+            })(),
             'attributes'            => BTL_GraphQL::attributes($variation),
             'giftPriceToman'        => $manual_gift !== ''
                 ? $manual_gift
