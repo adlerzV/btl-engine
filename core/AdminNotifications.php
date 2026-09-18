@@ -131,7 +131,7 @@ final class BTL_Admin_Notifications
         $order = wc_get_order($orderId);
         if (!$order) return;
         update_post_meta($orderId, '_btl_admin_new_order_notified', gmdate('c'));
-        self::pushToStaff('order', 'سفارش جدید', 'سفارش #' . $order->get_order_number() . ' نیاز به بررسی عملیاتی دارد.', '/admin/orders?order=' . $orderId);
+        self::pushToStaff('order', 'سفارش جدید', 'سفارش #' . $order->get_order_number() . ' نیاز به بررسی عملیاتی دارد.', '/admin/orders/' . $orderId);
     }
 
     public static function notify_new_ticket(int $postId, WP_Post $post, bool $update): void
