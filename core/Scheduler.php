@@ -405,6 +405,12 @@ final class BTL_Scheduler
             }
         }
 
+        if ($has_invalidation) {
+            foreach (array_keys($changed_ids) as $changed_id) {
+                BTL_Invalidation::bustPricingCache((int) $changed_id);
+            }
+        }
+
         if (!function_exists('btl_queue_revalidation') || !$has_invalidation) {
             return count($changed_ids);
         }

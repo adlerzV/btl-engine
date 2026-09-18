@@ -58,6 +58,15 @@ final class BTL_Invalidation
         add_action('acf/save_post', [self::class, 'on_acf_save'], 25, 1);
     }
 
+    public static function bustPricingCache(int $productId): void
+    {
+        if ($productId <= 0) {
+            return;
+        }
+
+        self::bustObjectCache($productId, [self::SCOPE_PRICING]);
+    }
+
     public static function queueProduct(int $productId, string $scope = self::SCOPE_ALL): void
     {
         if ($productId <= 0) {
