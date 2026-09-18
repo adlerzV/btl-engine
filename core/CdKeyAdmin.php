@@ -14,6 +14,11 @@ final class BTL_CdKey_Admin
     public static function render_stock_box($loop, $variation_data, $variation): void
     {
         if (!current_user_can('manage_woocommerce')) return;
+
+        if ($variation instanceof WP_Post) {
+            $variation = wc_get_product($variation->ID);
+        }
+
         if (!$variation instanceof WC_Product_Variation) return;
 
         try {
@@ -44,6 +49,7 @@ final class BTL_CdKey_Admin
 
         if (!$variationId || !$productId || trim($raw) === '' || strlen($raw) > 1048576) wp_send_json_error('ورودی نامعتبر', 400);
         if (!wp_verify_nonce($_POST['nonce'] ?? '', 'btl_cdkey_stock_' . $variationId)) wp_send_json_error('نشست نامعتبر', 403);
+
         $variation = wc_get_product($variationId);
         if (!$variation instanceof WC_Product_Variation || (int) $variation->get_parent_id() !== $productId || get_post_status($productId) !== 'publish') {
             wp_send_json_error('تنوع محصول نامعتبر است.', 400);
