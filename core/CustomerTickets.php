@@ -112,8 +112,8 @@ final class BTL_Customer_Tickets
                         'order' => 'ASC',
                         'meta_query' => [[
                             'key' => 'ticket_status',
-                            'value' => 'open',
-                            'compare' => '=',
+                            'value' => ['open', 'claimed', 'waiting_staff', 'answered'],
+                            'compare' => 'IN',
                         ]],
                     ]);
 
@@ -141,8 +141,8 @@ final class BTL_Customer_Tickets
                         "SELECT COUNT(*) FROM {$wpdb->posts} p
                          INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID
                          WHERE p.post_type = %s AND p.post_status = %s
-                           AND pm.meta_key = %s AND pm.meta_value = %s",
-                        'support_ticket', 'publish', 'ticket_status', 'open'
+                           AND pm.meta_key = %s AND pm.meta_value IN (%s,%s,%s,%s)",
+                        'support_ticket', 'publish', 'ticket_status', 'open', 'claimed', 'waiting_staff', 'answered'
                     ));
                 }, 'btl', 60);
             },

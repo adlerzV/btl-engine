@@ -1419,8 +1419,8 @@ final class BTL_GraphQL
                 'success' => ['type' => 'Boolean'],
             ],
             'mutateAndGetPayload' => function ($input) {
-                if (!current_user_can('manage_woocommerce')) {
-                    throw new GraphQL\Error\UserError('فقط پشتیبانی می‌تواند به نظرات پاسخ دهد.');
+                if (!BTL_Admin_Permissions::can(get_current_user_id(), 'reviews.moderate')) {
+                    throw new GraphQL\Error\UserError('دسترسی غیرمجاز.');
                 }
 
                 $review = get_comment((int)$input['reviewId']);
@@ -1449,6 +1449,7 @@ final class BTL_GraphQL
                 }
 
                 update_comment_meta($commentId, 'btl_is_staff_reply', 1);
+                BTL_Admin_Audit::record(get_current_user_id(), 'REVIEW_REPLY', 'review', (int)$review->comment_ID);
 
                 $product = wc_get_product((int)$review->comment_post_ID);
 
