@@ -97,7 +97,7 @@ final class BTL_Customer_Tickets
                 'first' => ['type' => 'Int'],
             ],
             'resolve' => static function ($root, $args, $context) {
-                if (!current_user_can('manage_woocommerce')) {
+                if (!BTL_Admin_Permissions::can(get_current_user_id(), 'tickets.read')) {
                     throw new GraphQL\Error\UserError('دسترسی غیرمجاز.');
                 }
 
@@ -130,7 +130,7 @@ final class BTL_Customer_Tickets
         register_graphql_field('RootQuery', 'adminOpenTicketsCount', [
             'type' => 'Int',
             'resolve' => static function () {
-                if (!current_user_can('manage_woocommerce')) {
+                if (!BTL_Admin_Permissions::can(get_current_user_id(), 'tickets.read')) {
                     return 0;
                 }
 

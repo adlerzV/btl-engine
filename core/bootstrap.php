@@ -21,6 +21,8 @@ function btl_autoload_core_class(string $class): void
             'BTL_Revalidator' => 'Revalidator.php',
             'BTL_Migrations' => 'Migrations.php',
             'BTL_Admin' => 'Admin.php',
+            'BTL_Admin_Permissions' => 'AdminPermissions.php',
+            'BTL_Admin_Audit' => 'AdminAudit.php',
             'BTL_Secure_Vault' => 'SecureVault.php',
             'BTL_Secure_Fields' => 'SecureFields.php',
             'BTL_Order_Security_Hooks' => 'OrderSecurityHooks.php',
@@ -80,6 +82,8 @@ BTL_Secure_Fields::boot();
 BTL_Order_Security_Hooks::boot();
 BTL_Order_Fulfillment::boot();
 BTL_Notifications::boot();
+BTL_Admin_Permissions::boot();
+BTL_Admin_Audit::boot();
 BTL_Sessions::boot();
 BTL_Ticket_Replies::boot();
 BTL_Wishlist_Alerts::boot();

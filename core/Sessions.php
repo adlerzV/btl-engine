@@ -300,7 +300,7 @@ final class BTL_Sessions
         // bind the rotated token before any other operation can use it. Do not
         // allow a bootstrap field to be combined with customer/order fields.
         $bootstrapOnly = preg_match('/\b(?:registerSession|touchSession)\b/i', $query)
-            && !preg_match('/\b(?:customer|viewer|user|orders|order|lineItems|downloadableItems|myTickets|myTicket|myReviews|notifications|sessions|wishlistIds|paymentUrl|submitCustomerOrder|revealOrderSecret|adminOpenTickets|adminOpenTicketsCount|pendingReviewsCount|toggleWishlistItem|updateCustomerProfile|updateUserAvatar|setPassword|replyToSupportTicket|submitSupportTicket|writeReview|editMyReview|deleteMyReview|writeBlogComment|replyToBlogComment|rateBlogPost|followBlogCategory|unfollowBlogCategory)\b/i', $query);
+            && !preg_match('/\b(?:customer|viewer|user|orders|order|lineItems|downloadableItems|myTickets|myTicket|myReviews|notifications|sessions|wishlistIds|adminPermissions|adminCan|paymentUrl|submitCustomerOrder|revealOrderSecret|adminOpenTickets|adminOpenTicketsCount|pendingReviewsCount|toggleWishlistItem|updateCustomerProfile|updateUserAvatar|setPassword|replyToSupportTicket|submitSupportTicket|writeReview|editMyReview|deleteMyReview|writeBlogComment|replyToBlogComment|rateBlogPost|followBlogCategory|unfollowBlogCategory)\b/i', $query);
         if ($bootstrapOnly) return $requestData;
 
         if (!self::sessionExists(get_current_user_id(), self::requestSessionId(), true)) {

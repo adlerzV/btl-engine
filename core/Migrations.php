@@ -6,7 +6,7 @@ final class BTL_Migrations
     private const OPTION = 'btl_schema_version';
     private const ATTEMPT_OPTION = 'btl_schema_upgrade_attempt';
     private const RETRY_BACKOFF = 900;
-    private const VERSION = 4;
+    private const VERSION = 5;
 
     public static function boot(): void { add_action('init', [self::class, 'maybe_upgrade'], 4); }
     public static function maybe_upgrade(): void
@@ -23,7 +23,7 @@ final class BTL_Migrations
         self::cleanup_legacy_scheduler_state();
         self::prepare_legacy_secure_fields();
         self::prepare_global_cdkey_uniqueness();
-        $installers=['BTL_Secure_Fields','BTL_Notifications','BTL_Sessions','BTL_Ticket_Replies','BTL_Otp','BTL_CdKey_Stock','BTL_Customer_Orders','BTL_Blog_Follow','BTL_Post_Ratings','BTL_Wishlist_Alerts','BTL_Login_Throttle'];
+        $installers=['BTL_Secure_Fields','BTL_Notifications','BTL_Sessions','BTL_Ticket_Replies','BTL_Otp','BTL_CdKey_Stock','BTL_Customer_Orders','BTL_Blog_Follow','BTL_Post_Ratings','BTL_Wishlist_Alerts','BTL_Login_Throttle', 'BTL_Admin_Audit'];
         $success=true;
         foreach($installers as $class){
             if(!class_exists($class)||!is_callable([$class,'install']))continue;

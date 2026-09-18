@@ -44,7 +44,7 @@ final class BTL_Customer_Reviews
         register_graphql_field('RootQuery', 'pendingReviewsCount', [
             'type' => 'Int',
             'resolve' => static function () {
-                if (!current_user_can('manage_woocommerce')) {
+                if (!BTL_Admin_Permissions::can(get_current_user_id(), 'reviews.moderate')) {
                     return 0;
                 }
 
