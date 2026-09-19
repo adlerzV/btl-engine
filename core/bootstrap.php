@@ -116,7 +116,11 @@ add_action('update_option_btl_rate_sync_interval', ['BTL_Rate_Sync', 'maybe_resc
 add_filter('register_post_type_args', ['BTL_GraphQL', 'expose_support_ticket_type'], 10, 2);
 add_filter('graphql_post_object_connection_query_args', ['BTL_GraphQL', 'restrict_support_ticket_query'], 10, 5);
 add_filter('graphql_post_object_connection_query_args', ['BTL_GraphQL', 'apply_region_filter'], 10, 5);
-add_action('woocommerce_save_product_variation', ['BTL_GraphQL', 'invalidate_region_cache'], 100);
+add_action('woocommerce_before_product_object_save', ['BTL_GraphQL', 'capture_variation_region_state'], 6, 1);
+add_action('woocommerce_update_product_variation', ['BTL_GraphQL', 'invalidate_variation_region_cache'], 110, 1);
+add_action('woocommerce_new_product_variation', ['BTL_GraphQL', 'invalidate_variation_region_cache'], 110, 1);
+add_action('before_delete_post', ['BTL_GraphQL', 'invalidate_deleted_variation_region_cache'], 11, 1);
+add_action('transition_post_status', ['BTL_GraphQL', 'invalidate_region_status_cache'], 21, 3);
 add_action('graphql_register_types', ['BTL_GraphQL', 'register'], 10);
 
 if (is_admin()) {

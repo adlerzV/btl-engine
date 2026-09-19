@@ -4,12 +4,13 @@ defined('ABSPATH') || exit;
 
 final class BTL_GraphQL
 {
+    private static array $pendingRegionAliases = [];
+
     public static function boot(): void
     {
         add_filter('register_post_type_args', [self::class, 'expose_support_ticket_type'], 10, 2);
         add_filter('graphql_post_object_connection_query_args', [self::class, 'restrict_support_ticket_query'], 10, 5);
         add_filter('graphql_post_object_connection_query_args', [self::class, 'apply_region_filter'], 10, 5);
-        add_action('woocommerce_save_product_variation', [self::class, 'invalidate_region_cache'], 100);
         add_action('graphql_register_types', [self::class, 'register'], 10);
     }
 
@@ -84,31 +85,36 @@ final class BTL_GraphQL
     private static function region_excluded_product_ids(string $regionSlug): array
     {
         $aliases = self::region_aliases($regionSlug);
-        $cacheKey = 'excluded_' . md5(implode('|', $aliases));
+        $cacheKey = self::region_cache_key($aliases);
 
         return BTL_Cache::remember($cacheKey, static function () use ($aliases) {
             global $wpdb;
 
-            $placeholders = implode(',', array_fill(0, count($aliases), '%s'));
+            $metaKeys = self::region_attribute_meta_keys();
+            if (!$metaKeys) {
+                return [];
+            }
+
+            $metaKeyPlaceholders = implode(',', array_fill(0, count($metaKeys), '%s'));
+            $valuePlaceholders = implode(',', array_fill(0, count($aliases), '%s'));
+            $params = array_merge($metaKeys, $aliases);
 
             $sql = $wpdb->prepare(
                 "SELECT p.post_parent
                  FROM {$wpdb->posts} p
-                 INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID
+                 INNER JOIN {$wpdb->postmeta} pm
+                    ON pm.post_id = p.ID
+                   AND pm.meta_key IN ({$metaKeyPlaceholders})
                  WHERE p.post_type = 'product_variation'
                    AND p.post_status = 'publish'
-                   AND (
-                       pm.meta_key LIKE 'attribute_%region%'
-                       OR pm.meta_key LIKE 'attribute_%ریجن%'
-                   )
                  GROUP BY p.post_parent
-                 HAVING SUM(
+                 HAVING MAX(
                      CASE
-                         WHEN pm.meta_value IN ({$placeholders}) THEN 1
+                         WHEN pm.meta_value IN ({$valuePlaceholders}) THEN 1
                          ELSE 0
                      END
                  ) = 0",
-                $aliases
+                $params
             );
 
             $excludedIds = $wpdb->get_col($sql);
@@ -119,6 +125,163 @@ final class BTL_GraphQL
 
             return array_values(array_map('intval', $excludedIds));
         }, 'btl_regions', DAY_IN_SECONDS);
+    }
+
+    private static function region_cache_key(array $aliases): string
+    {
+        return 'excluded_' . md5(implode('|', $aliases));
+    }
+
+    private static function region_attribute_meta_keys(): array
+    {
+        return BTL_Cache::remember(
+            'region_attribute_meta_keys_v2',
+            static function (): array {
+                $keys = [
+                    'attribute_pa_region_shop',
+                    'attribute_region_shop',
+                    'attribute_region',
+                    'attribute_ریجن',
+                    'attribute_pa_region',
+                    'attribute_pa_ریجن',
+                ];
+
+                if (function_exists('wc_get_attribute_taxonomies')) {
+                    $taxonomies = wc_get_attribute_taxonomies();
+
+                    foreach ($taxonomies as $taxonomy) {
+                        $name = sanitize_title((string)($taxonomy->attribute_name ?? ''));
+                        $rawName = (string)($taxonomy->attribute_name ?? '');
+
+                        if (
+                            $name !== ''
+                            && (stripos($name, 'region') !== false || stripos($rawName, 'ریجن') !== false)
+                        ) {
+                            $keys[] = 'attribute_pa_' . $name;
+                            $keys[] = 'attribute_' . $name;
+                        }
+                    }
+                }
+
+                return array_values(array_unique(array_filter($keys)));
+            },
+            'btl_regions',
+            DAY_IN_SECONDS
+        );
+    }
+
+    private static function variation_region_aliases($variation): array
+    {
+        if (!is_object($variation) || !method_exists($variation, 'get_variation_attributes')) {
+            return [];
+        }
+
+        $aliases = [];
+
+        foreach ((array)$variation->get_variation_attributes() as $key => $value) {
+            $taxonomy = str_replace('attribute_', '', (string)$key);
+
+            if (
+                stripos($taxonomy, 'region') === false
+                && stripos($taxonomy, 'ریجن') === false
+            ) {
+                continue;
+            }
+
+            $value = trim((string)$value);
+            if ($value === '') {
+                continue;
+            }
+
+            $aliases = array_merge($aliases, self::region_aliases($value));
+        }
+
+        return array_values(array_unique($aliases));
+    }
+
+    private static function invalidate_region_cache_keys(array $aliases): void
+    {
+        if (!$aliases) {
+            return;
+        }
+
+        $cacheKeys = [];
+        foreach ($aliases as $alias) {
+            $cacheKeys[self::region_cache_key(self::region_aliases((string)$alias))] = true;
+        }
+
+        foreach (array_keys($cacheKeys) as $cacheKey) {
+            BTL_Cache::delete($cacheKey, 'btl_regions');
+        }
+    }
+
+    public static function capture_variation_region_state($product): void
+    {
+        if (!is_object($product) || !method_exists($product, 'get_id') || !method_exists($product, 'get_type')) {
+            return;
+        }
+
+        if ($product->get_type() !== 'variation') {
+            return;
+        }
+
+        self::$pendingRegionAliases[(int)$product->get_id()] = self::variation_region_aliases($product);
+    }
+
+    public static function invalidate_variation_region_cache(int $variationId): void
+    {
+        $variationId = (int)$variationId;
+        $aliases = self::$pendingRegionAliases[$variationId] ?? [];
+
+        if (function_exists('wc_get_product')) {
+            $variation = wc_get_product($variationId);
+            if ($variation) {
+                $aliases = array_merge($aliases, self::variation_region_aliases($variation));
+            }
+        }
+
+        self::invalidate_region_cache_keys(array_values(array_unique($aliases)));
+        unset(self::$pendingRegionAliases[$variationId]);
+    }
+
+    public static function invalidate_deleted_variation_region_cache(int $postId): void
+    {
+        $postId = (int)$postId;
+        $post = get_post($postId);
+
+        if (!$post || $post->post_type !== 'product_variation') {
+            return;
+        }
+
+        $aliases = [];
+        if (function_exists('wc_get_product')) {
+            $variation = wc_get_product($postId);
+            if ($variation) {
+                $aliases = self::variation_region_aliases($variation);
+            }
+        }
+
+        self::invalidate_region_cache_keys($aliases);
+        unset(self::$pendingRegionAliases[$postId]);
+    }
+
+    public static function invalidate_region_status_cache($newStatus, $oldStatus, $post): void
+    {
+        if (!($post instanceof WP_Post) || $post->post_type !== 'product_variation' || $newStatus === $oldStatus) {
+            return;
+        }
+
+        $variationId = (int)$post->ID;
+        $aliases = self::$pendingRegionAliases[$variationId] ?? [];
+
+        if (function_exists('wc_get_product')) {
+            $variation = wc_get_product($variationId);
+            if ($variation) {
+                $aliases = array_merge($aliases, self::variation_region_aliases($variation));
+            }
+        }
+
+        self::invalidate_region_cache_keys(array_values(array_unique($aliases)));
     }
 
     private static function region_aliases(string $regionSlug): array
@@ -147,7 +310,9 @@ final class BTL_GraphQL
 
     public static function invalidate_region_cache(): void
     {
-        BTL_Cache::flushGroup('btl_regions');
+        foreach (['eu', 'us', 'tr', 'ua'] as $region) {
+            BTL_Cache::delete(self::region_cache_key(self::region_aliases($region)), 'btl_regions');
+        }
     }
 
     private static function safe_public_link($value): string
