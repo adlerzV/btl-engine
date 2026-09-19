@@ -7,6 +7,8 @@ final class BTL_Sessions
 {
     private const READY_OPTION = 'btl_sessions_table_ready_v2';
     private const SESSION_INACTIVITY_DAYS = 30;
+    /** @var array<string,bool> */
+    private static array $requestSessionCache = [];
 
     public static function table(): string
     {
@@ -181,6 +183,7 @@ final class BTL_Sessions
             $userId, $sessionId, $deviceLabel, $ipAddress, $userAgent, $tokenHash, $now, $now
         ));
         if ($result === false) throw new RuntimeException('session_write_failed');
+        self::clearRequestSessionCache();
     }
 
     public static function touch(int $userId, string $sessionId): void
@@ -198,6 +201,7 @@ final class BTL_Sessions
             $tokenHash, $now, $userId, $sessionId
         ));
         if ($updated === false || $updated < 1) throw new RuntimeException('session_touch_failed');
+        self::clearRequestSessionCache();
     }
 
     public static function revoke(int $userId, string $sessionId): void
@@ -210,6 +214,7 @@ final class BTL_Sessions
             ['%d'],
             ['%d', '%s']
         );
+        self::clearRequestSessionCache();
     }
 
     public static function revokeAll(int $userId): void
@@ -222,6 +227,7 @@ final class BTL_Sessions
             ['%d'],
             ['%d']
         );
+        self::clearRequestSessionCache();
     }
 
     public static function revokeAllExcept(int $userId, ?string $exceptSessionId): void
@@ -237,6 +243,7 @@ final class BTL_Sessions
             $userId,
             $exceptSessionId
         ));
+        self::clearRequestSessionCache();
     }
 
     public static function isValid(int $userId, string $sessionId): bool
@@ -246,16 +253,34 @@ final class BTL_Sessions
 
     private static function sessionExists(int $userId, string $sessionId, bool $requireToken, ?string $expectedTokenHash = null): bool
     {
-        global $wpdb;
-        $sql = "SELECT revoked,token_hash FROM " . self::table() . " WHERE user_id=%d AND session_id=%s LIMIT 1";
-        $args = [$userId, $sessionId];
-        if ($requireToken) {
-            $sql = "SELECT revoked,token_hash FROM " . self::table() . " WHERE user_id=%d AND session_id=%s AND token_hash=%s LIMIT 1";
-            $args[] = $expectedTokenHash ?: self::currentTokenHash();
+        if ($userId < 1 || $sessionId === '') return false;
+
+        $tokenHash = $requireToken ? ($expectedTokenHash ?: self::currentTokenHash()) : '';
+        $cacheKey = $userId . '|' . $sessionId . '|' . ($requireToken ? '1' : '0') . '|' . $tokenHash;
+        if (array_key_exists($cacheKey, self::$requestSessionCache)) {
+            return self::$requestSessionCache[$cacheKey];
         }
-        $row = $wpdb->get_row($wpdb->prepare($sql, ...$args));
-        if ($wpdb->last_error || !$row) return false;
-        return (int)$row->revoked === 0 && (!$requireToken || (string)$row->token_hash !== '');
+
+        global $wpdb;
+        $table = self::table();
+        if ($requireToken) {
+            if ($tokenHash === '') return self::$requestSessionCache[$cacheKey] = false;
+            $sql = "SELECT 1 FROM {$table} WHERE user_id=%d AND session_id=%s AND token_hash=%s AND revoked=0 LIMIT 1";
+            $row = $wpdb->get_var($wpdb->prepare($sql, $userId, $sessionId, $tokenHash));
+        } else {
+            $sql = "SELECT 1 FROM {$table} WHERE user_id=%d AND session_id=%s AND revoked=0 LIMIT 1";
+            $row = $wpdb->get_var($wpdb->prepare($sql, $userId, $sessionId));
+        }
+
+        if ($wpdb->last_error) {
+            return self::$requestSessionCache[$cacheKey] = false;
+        }
+        return self::$requestSessionCache[$cacheKey] = ((string)$row === '1');
+    }
+
+    private static function clearRequestSessionCache(): void
+    {
+        self::$requestSessionCache = [];
     }
 
     private static function currentTokenHash(): string
