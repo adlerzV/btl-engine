@@ -175,7 +175,7 @@ add_action('graphql_register_types', ['BTL_Blog_Follow', 'register'], 20);
 add_action('btl_price_dropped', ['BTL_Wishlist_Alerts', 'notify_watchers'], 10, 3);
 // Blog ratings and Gold/user GraphQL are loaded only when GraphQL schema registration actually runs.
 add_action('graphql_register_types', ['BTL_Post_Ratings', 'register'], 10);
-add_action('graphql_register_types', ['BTL_Gold_Market', 'register_user_graphql'], 11);
+// Gold storefront GraphQL is currently registered by its actual GraphQL owner when needed.
 add_action('graphql_register_types', ['BTL_Admin_Totp', 'register'], 10);
 add_action('graphql_register_types', ['BTL_Admin_Sms_Auth', 'register'], 10);
 add_action('graphql_register_types', ['BTL_Phone_Auth', 'register'], 10);
