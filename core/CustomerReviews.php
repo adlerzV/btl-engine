@@ -41,6 +41,7 @@ final class BTL_Customer_Reviews
             ],
         ]);
 
+        if (btl_is_admin_graphql_request()) {
         register_graphql_field('RootQuery', 'pendingReviewsCount', [
             'type' => 'Int',
             'resolve' => static function () {
@@ -57,6 +58,8 @@ final class BTL_Customer_Reviews
                 }, 'btl', 60);
             },
         ]);
+
+        }
 
         register_graphql_field('RootQuery', 'myReviews', [
             'type' => 'MyReviewsConnection',

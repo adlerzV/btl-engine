@@ -2,7 +2,7 @@
 
 /**
  * Plugin Name: BTL Engine
- * Version: 1.6.0
+ * Version: 1.7.0
  * Requires PHP: 8.0
  * Requires Plugins: woocommerce, wp-graphql
  */
@@ -14,6 +14,8 @@ require_once __DIR__ . '/core/bootstrap.php';
 register_activation_hook(__FILE__, function () {
     BTL_Migrations::run_schema_upgrade();
     BTL_Rate_Sync::activate();
+    BTL_CdKey_Stock::schedule_cleanup();
+    BTL_Customer_Orders::scheduleRecovery();
 });
 
 register_deactivation_hook(__FILE__, function () {
@@ -26,6 +28,7 @@ register_deactivation_hook(__FILE__, function () {
             'btl_batch_job',
             'btl_product_chunk_job',
             'btl_cleanup_job',
+            'btl_checkout_recovery',
             'btl_cdkey_cleanup_orphans',
         ] as $hook) {
             as_unschedule_all_actions($hook, null, 'btl');

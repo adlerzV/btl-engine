@@ -14,6 +14,7 @@ final class BTL_Admin_CdKeys
 
     public static function register(): void
     {
+        if (!btl_is_admin_graphql_request()) return;
         register_graphql_object_type('BtlAdminCdKeyStockItem', [
             'fields' => [
                 'stockId' => ['type' => 'Int'],

@@ -3,6 +3,9 @@ defined('ABSPATH') || exit;
 
 final class BTL_Admin_Permissions
 {
+    /** @var array<int, array<int, string>> */
+    private static array $requestCache = [];
+
     private const META_KEY = 'btl_admin_permissions';
 
     public const ALL = [
@@ -32,19 +35,22 @@ final class BTL_Admin_Permissions
         if ($userId < 1) {
             return [];
         }
+        if (isset(self::$requestCache[$userId])) {
+            return self::$requestCache[$userId];
+        }
 
         $saved = get_user_meta($userId, self::META_KEY, true);
         if (is_array($saved)) {
-            return self::sanitize($saved);
+            return self::$requestCache[$userId] = self::sanitize($saved);
         }
 
         // Compatibility mode for the existing WooCommerce staff model.
         // Explicit user-level permissions override this fallback once configured.
         if (user_can($userId, 'manage_woocommerce')) {
-            return self::ALL;
+            return self::$requestCache[$userId] = self::ALL;
         }
 
-        return [];
+        return self::$requestCache[$userId] = [];
     }
 
     public static function can(int $userId, string $permission): bool
@@ -59,11 +65,16 @@ final class BTL_Admin_Permissions
         }
 
         $clean = self::sanitize($permissions);
-        return update_user_meta($userId, self::META_KEY, $clean) !== false;
+        $updated = update_user_meta($userId, self::META_KEY, $clean) !== false;
+        if ($updated) {
+            self::$requestCache[$userId] = $clean;
+        }
+        return $updated;
     }
 
     public static function register_graphql(): void
     {
+        if (!btl_is_admin_graphql_request()) return;
         register_graphql_field('User', 'adminPermissions', [
             'type' => ['list_of' => 'String'],
             'resolve' => static function ($user): array {

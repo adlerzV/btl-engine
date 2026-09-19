@@ -13,8 +13,6 @@ final class BTL_CdKey_Stock
 
     public static function boot(): void
     {
-        add_action('init', [self::class, 'maybe_install'], 5);
-        add_action('init', [self::class, 'schedule_cleanup'], 20);
         add_action('graphql_register_types', [self::class, 'register'], 20);
         add_action('woocommerce_order_status_changed', [self::class, 'maybe_assign_on_status_change'], 20, 4);
         add_action('before_delete_post', [self::class, 'release_deleted_order'], 10);

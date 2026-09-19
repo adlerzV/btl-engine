@@ -17,12 +17,6 @@ final class BTL_Notifications
     public static function boot(): void
     {
         add_action(
-            'init',
-            [self::class, 'maybe_install'],
-            5
-        );
-
-        add_action(
             'woocommerce_order_status_completed',
             [self::class, 'notify_order_completed']
         );

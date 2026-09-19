@@ -10,6 +10,7 @@ final class BTL_Admin_Customers
 
     public static function register(): void
     {
+        if (!btl_is_admin_graphql_request()) return;
         register_graphql_object_type('BtlAdminCustomer', [
             'fields' => [
                 'databaseId' => ['type' => 'Int'],

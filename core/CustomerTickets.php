@@ -91,6 +91,7 @@ final class BTL_Customer_Tickets
             },
         ]);
 
+        if (btl_is_admin_graphql_request()) {
         register_graphql_field('RootQuery', 'adminOpenTickets', [
             'type' => ['list_of' => 'SupportTicket'],
             'args' => [
@@ -147,6 +148,7 @@ final class BTL_Customer_Tickets
                 }, 'btl', 60);
             },
         ]);
+        }
     }
 
     public static function encodeCursor(int $offset): string

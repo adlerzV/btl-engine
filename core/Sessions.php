@@ -17,7 +17,6 @@ final class BTL_Sessions
     public static function boot(): void
     {
         add_action('graphql_register_types', [self::class, 'register'], 10);
-        add_action('init', [self::class, 'maybe_install'], 5);
         // Reject bearer-token GraphQL requests unless the token is bound to a live session.
         add_filter('graphql_request_data', [self::class, 'authorizeGraphqlRequest'], 5, 2);
     }

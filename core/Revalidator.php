@@ -23,8 +23,6 @@ final class BTL_Revalidator
 
     public static function boot(): void
     {
-        // Temporary self-install until the schema migration owns this table.
-        add_action('init', [self::class, 'install_queue_table'], 1);
         add_action('btl_revalidate_flush', [self::class, 'flush'], 10);
     }
 

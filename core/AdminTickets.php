@@ -9,7 +9,6 @@ final class BTL_Admin_Tickets
 
     public static function boot(): void
     {
-        add_action('init', [self::class, 'maybe_install'], 5);
         add_action('graphql_register_types', [self::class, 'register'], 12);
     }
 
@@ -55,6 +54,7 @@ final class BTL_Admin_Tickets
 
     public static function register(): void
     {
+        if (!btl_is_admin_graphql_request()) return;
         register_graphql_object_type('BtlAdminTicket', [
             'fields' => [
                 'databaseId' => ['type' => 'Int'],

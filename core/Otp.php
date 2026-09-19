@@ -18,7 +18,6 @@ final class BTL_Otp
 
     public static function boot(): void
     {
-        add_action('init', [self::class, 'maybe_install'], 5);
     }
 
     public static function maybe_install(): void

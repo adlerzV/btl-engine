@@ -8,7 +8,7 @@ final class BTL_Secure_Fields
     private const READY_OPTION = 'btl_secure_fields_table_ready_v2';
     private const ACTIVE_STATUS = 'active';
 
-    public static function boot(): void { add_action('init', [self::class, 'maybe_install'], 5); }
+
     public static function maybe_install(): void { BTL_Helpers::ensureTable(self::READY_OPTION, [self::class, 'install']); }
     public static function table(): string { global $wpdb; return $wpdb->prefix . 'btl_secure_fields'; }
 

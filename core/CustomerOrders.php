@@ -6,11 +6,24 @@ final class BTL_Customer_Orders
     private const READY_OPTION = 'btl_checkout_requests_table_ready';
     public static function boot(): void
     {
-        add_action('init', [self::class, 'maybe_install'], 5);
-        add_action('init', [self::class, 'recoverStaleRequests'], 30);
+        add_action('btl_checkout_recovery', [self::class, 'recoverStaleRequests']);
         add_action('graphql_register_types', [self::class, 'register'], 10);
     }
     public static function maybe_install(): void { BTL_Helpers::ensureTable(self::READY_OPTION, [self::class, 'install']); }
+
+    public static function scheduleRecovery(): void
+    {
+        if (function_exists('as_next_scheduled_action') && function_exists('as_schedule_recurring_action')) {
+            if (!as_next_scheduled_action('btl_checkout_recovery', [], 'btl')) {
+                as_schedule_recurring_action(time() + 300, 300, 'btl_checkout_recovery', [], 'btl');
+            }
+            return;
+        }
+
+        if (!wp_next_scheduled('btl_checkout_recovery')) {
+            wp_schedule_event(time() + 600, 'hourly', 'btl_checkout_recovery');
+        }
+    }
     private static function table(): string { global $wpdb; return $wpdb->prefix . 'btl_checkout_requests'; }
     public static function install(): void
     {

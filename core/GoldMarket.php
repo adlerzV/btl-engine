@@ -12,7 +12,6 @@ final class BTL_Gold_Market
 
     public static function boot(): void
     {
-        add_action('init', [self::class, 'maybe_install'], 5);
         add_action('graphql_register_types', [self::class, 'register_user_graphql'], 11);
     }
 

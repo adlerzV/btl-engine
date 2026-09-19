@@ -9,7 +9,6 @@ final class BTL_Wishlist_Alerts
 
     public static function boot(): void
     {
-        add_action('init', [self::class, 'maybe_install'], 5);
         add_action('btl_price_dropped', [self::class, 'notify_watchers'], 10, 3);
     }
 

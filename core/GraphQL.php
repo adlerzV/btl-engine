@@ -1410,6 +1410,7 @@ final class BTL_GraphQL
             },
         ]);
 
+        if (btl_is_admin_graphql_request()) {
         register_graphql_mutation('replyToProductReview', [
             'inputFields' => [
                 'reviewId' => ['type' => ['non_null' => 'Int']],
@@ -1462,5 +1463,6 @@ final class BTL_GraphQL
                 return ['success' => true];
             },
         ]);
+        }
     }
 }

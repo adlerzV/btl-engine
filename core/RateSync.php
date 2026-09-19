@@ -22,7 +22,6 @@ final class BTL_Rate_Sync
     public static function boot(): void
     {
         add_action(self::HOOK, [self::class, 'run']);
-        add_action('init', [self::class, 'maybe_schedule'], 5);
         add_action('update_option_' . self::OPTION_KEY, [self::class, 'maybe_reschedule'], 10, 2);
     }
 

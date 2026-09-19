@@ -9,7 +9,6 @@ final class BTL_Post_Ratings
 
     public static function boot(): void
     {
-        add_action('init', [self::class, 'maybe_install'], 5);
         add_action('graphql_register_types', [self::class, 'register'], 10);
     }
 

@@ -17,6 +17,7 @@ final class BTL_Admin_Gold
 
     public static function register(): void
     {
+        if (!btl_is_admin_graphql_request()) return;
         register_graphql_object_type('BtlGoldBuyOrder', [
             'fields' => [
                 'databaseId'=>['type'=>'Int'],'gameSlug'=>['type'=>'String'],'gameName'=>['type'=>'String'],'region'=>['type'=>'String'],'amount'=>['type'=>'Int'],'offerAmount'=>['type'=>'String'],'ratePer1k'=>['type'=>'String'],'timerMinutes'=>['type'=>'Int'],'status'=>['type'=>'String'],'createdBy'=>['type'=>'Int'],'createdAt'=>['type'=>'String'],'updatedAt'=>['type'=>'String'],'proposalCount'=>['type'=>'Int'],'pendingProposalCount'=>['type'=>'Int'],

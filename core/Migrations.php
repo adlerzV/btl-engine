@@ -6,7 +6,7 @@ final class BTL_Migrations
     private const OPTION = 'btl_schema_version';
     private const ATTEMPT_OPTION = 'btl_schema_upgrade_attempt';
     private const RETRY_BACKOFF = 900;
-    private const VERSION = 7;
+    private const VERSION = 8;
 
     public static function boot(): void { add_action('init', [self::class, 'maybe_upgrade'], 4); }
     public static function maybe_upgrade(): void
@@ -53,7 +53,13 @@ final class BTL_Migrations
         if(class_exists('BTL_Notifications')&&is_callable(['BTL_Notifications','maybe_add_type_column'])){
             try{BTL_Notifications::maybe_add_type_column();}catch(Throwable $e){$success=false;BTL_Helpers::logger('Migration: notification type column update failed');}
         }
-        if($success){update_option(self::OPTION,self::VERSION,false);delete_option(self::ATTEMPT_OPTION);}
+        if($success){
+            update_option(self::OPTION,self::VERSION,false);
+            delete_option(self::ATTEMPT_OPTION);
+            if (class_exists('BTL_Rate_Sync')) { BTL_Rate_Sync::activate(); }
+            if (class_exists('BTL_CdKey_Stock')) { BTL_CdKey_Stock::schedule_cleanup(); }
+            if (class_exists('BTL_Customer_Orders')) { BTL_Customer_Orders::scheduleRecovery(); }
+        }
     }
 
     private static function prepare_legacy_secure_fields(): void

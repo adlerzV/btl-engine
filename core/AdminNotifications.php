@@ -9,11 +9,15 @@ final class BTL_Admin_Notifications
 
     public static function boot(): void
     {
-        add_action('init', [self::class, 'maybe_install'], 5);
+        // Operational notification hooks must stay active on storefront requests.
         add_action('woocommerce_new_order', [self::class, 'notify_new_order'], 20, 1);
         add_action('save_post_support_ticket', [self::class, 'notify_new_ticket'], 20, 3);
         add_action('wp_insert_comment', [self::class, 'notify_new_review'], 20, 2);
-        add_action('graphql_register_types', [self::class, 'register'], 12);
+
+        // The GraphQL schema itself is Admin-only; the event hooks above are not.
+        if (btl_is_admin_graphql_request()) {
+            add_action('graphql_register_types', [self::class, 'register'], 12);
+        }
     }
 
     public static function maybe_install(): void { BTL_Helpers::ensureTable(self::READY_OPTION, [self::class, 'install']); }
@@ -51,17 +55,22 @@ final class BTL_Admin_Notifications
     public static function push(int $adminUserId, string $type, string $title, string $body, ?string $link = null): bool
     {
         global $wpdb;
-        return $wpdb->insert(self::table(), [
+        $ok = $wpdb->insert(self::table(), [
             'admin_user_id' => $adminUserId,
             'type' => sanitize_key($type),
             'title' => sanitize_text_field($title),
             'body' => wp_kses_post($body),
             'link' => $link,
         ], ['%d', '%s', '%s', '%s', '%s']) !== false;
+        if ($ok) {
+            BTL_Cache::delete("admin_unread_notifications_{$adminUserId}");
+        }
+        return $ok;
     }
 
     public static function register(): void
     {
+        if (!btl_is_admin_graphql_request()) return;
         register_graphql_object_type('BtlAdminNotification', [
             'fields' => [
                 'databaseId' => ['type' => 'Int'],
@@ -76,9 +85,12 @@ final class BTL_Admin_Notifications
         register_graphql_field('RootQuery', 'adminUnreadNotificationsCount', [
             'type' => 'Int',
             'resolve' => static function (): int {
-                if (!get_current_user_id() || !current_user_can('manage_woocommerce')) return 0;
-                global $wpdb;
-                return (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . self::table() . " WHERE admin_user_id=%d AND is_read=0", get_current_user_id()));
+                $userId = get_current_user_id();
+                if (!$userId || !current_user_can('manage_woocommerce')) return 0;
+                return (int) BTL_Cache::remember("admin_unread_notifications_{$userId}", static function () use ($userId): int {
+                    global $wpdb;
+                    return (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . self::table() . " WHERE admin_user_id=%d AND is_read=0", $userId));
+                }, 'btl', 10);
             },
         ]);
         register_graphql_field('RootQuery', 'adminNotifications', [
@@ -113,13 +125,16 @@ final class BTL_Admin_Notifications
                 self::assertStaff();
                 global $wpdb;
                 $ids = array_values(array_filter(array_map('absint', (array)($input['notificationIds'] ?? []))));
+                $userId = get_current_user_id();
                 if (!$ids) {
-                    $wpdb->update(self::table(), ['is_read' => 1], ['admin_user_id' => get_current_user_id(), 'is_read' => 0], ['%d'], ['%d', '%d']);
+                    $wpdb->update(self::table(), ['is_read' => 1], ['admin_user_id' => $userId, 'is_read' => 0], ['%d'], ['%d', '%d']);
+                    BTL_Cache::delete("admin_unread_notifications_{$userId}");
                     return ['success' => true];
                 }
                 $placeholders = implode(',', array_fill(0, count($ids), '%d'));
                 $sql = "UPDATE " . self::table() . " SET is_read=1 WHERE admin_user_id=%d AND id IN ({$placeholders})";
-                $wpdb->query($wpdb->prepare($sql, get_current_user_id(), ...$ids));
+                $wpdb->query($wpdb->prepare($sql, $userId, ...$ids));
+                BTL_Cache::delete("admin_unread_notifications_{$userId}");
                 return ['success' => true];
             },
         ]);
@@ -131,6 +146,7 @@ final class BTL_Admin_Notifications
         $order = wc_get_order($orderId);
         if (!$order) return;
         update_post_meta($orderId, '_btl_admin_new_order_notified', gmdate('c'));
+        BTL_Cache::delete('admin_processing_orders_count');
         self::pushToStaff('order', 'سفارش جدید', 'سفارش #' . $order->get_order_number() . ' نیاز به بررسی عملیاتی دارد.', '/admin/orders?order=' . $orderId);
     }
 

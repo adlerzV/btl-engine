@@ -10,7 +10,6 @@ final class BTL_Blog_Follow
 
     public static function boot(): void
     {
-        add_action('init', [self::class, 'maybe_install'], 5);
         add_action('graphql_register_types', [self::class, 'register'], 20);
         add_action('transition_post_status', [self::class, 'on_status_change'], 10, 3);
     }

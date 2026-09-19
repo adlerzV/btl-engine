@@ -17,6 +17,7 @@ final class BTL_Admin_Orders
 
     public static function register(): void
     {
+        if (!btl_is_admin_graphql_request()) return;
         register_graphql_object_type('BtlAdminOrderItem', [
             'fields' => [
                 'databaseId' => ['type' => 'Int'],
@@ -129,14 +130,16 @@ final class BTL_Admin_Orders
                     return 0;
                 }
 
-                $result = wc_get_orders([
-                    'status' => ['processing'],
-                    'limit' => 1,
-                    'return' => 'ids',
-                    'paginate' => true,
-                ]);
+                return (int) BTL_Cache::remember('admin_processing_orders_count', static function (): int {
+                    $result = wc_get_orders([
+                        'status' => ['processing'],
+                        'limit' => 1,
+                        'return' => 'ids',
+                        'paginate' => true,
+                    ]);
 
-                return is_object($result) && isset($result->total) ? (int)$result->total : 0;
+                    return is_object($result) && isset($result->total) ? (int)$result->total : 0;
+                }, 'btl', 10);
             },
         ]);
 
@@ -186,6 +189,7 @@ final class BTL_Admin_Orders
                     }
                 }
                 if ($old !== $status) {
+                    BTL_Cache::delete('admin_processing_orders_count');
                     $order->update_status($status, 'Admin Operations Center');
                     BTL_Admin_Audit::record(get_current_user_id(), 'ORDER_STATUS_CHANGE', 'order', (int)$order->get_id(), 'success', ['from' => $old, 'to' => $status]);
                 }
