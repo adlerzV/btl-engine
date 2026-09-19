@@ -116,6 +116,29 @@ final class BTL_Secure_Fields
         return $values;
     }
 
+    public static function revealAllForStaffCdKey(int $orderId, int $itemId, int $staffUserId): array
+    {
+        global $wpdb;
+        $table = self::table();
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM {$table} WHERE order_id=%d AND item_id=%d AND field_type=%s AND status=%s ORDER BY id ASC",
+            $orderId, $itemId, self::CDKEY_TYPE, self::ACTIVE_STATUS
+        ));
+        $values = [];
+        foreach ($rows ?: [] as $row) {
+            $plain = BTL_Secure_Vault::decrypt((string)$row->ciphertext);
+            if ($plain === null) {
+                BTL_Helpers::logger("SecureFields: admin CD Key decrypt failed for row {$row->id}");
+                continue;
+            }
+            $values[] = $plain;
+            if ($row->revealed_at === null) {
+                $wpdb->update($table, ['revealed_at' => current_time('mysql', true), 'revealed_by' => $staffUserId], ['id' => $row->id], ['%s','%d'], ['%d']);
+            }
+        }
+        return $values;
+    }
+
     public static function revealForStaff(int $orderId, int $itemId, string $fieldType, int $staffUserId): ?string
     {
         if (!in_array($fieldType, self::CREDENTIAL_TYPES, true)) return null;

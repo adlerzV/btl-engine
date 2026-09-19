@@ -28,6 +28,7 @@ function btl_autoload_core_class(string $class): void
             'BTL_Admin_Customers' => 'AdminCustomers.php',
             'BTL_Admin_Reviews' => 'AdminReviews.php',
             'BTL_Admin_Notifications' => 'AdminNotifications.php',
+            'BTL_Admin_CdKeys' => 'AdminCdKeys.php',
             'BTL_Secure_Vault' => 'SecureVault.php',
             'BTL_Secure_Fields' => 'SecureFields.php',
             'BTL_Order_Security_Hooks' => 'OrderSecurityHooks.php',
@@ -94,6 +95,7 @@ BTL_Admin_Tickets::boot();
 BTL_Admin_Customers::boot();
 BTL_Admin_Reviews::boot();
 BTL_Admin_Notifications::boot();
+BTL_Admin_CdKeys::boot();
 BTL_Sessions::boot();
 BTL_Ticket_Replies::boot();
 BTL_Wishlist_Alerts::boot();
