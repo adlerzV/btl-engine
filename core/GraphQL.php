@@ -300,8 +300,11 @@ final class BTL_GraphQL
         }
 
         foreach ($map as $aliases) {
-            if (in_array($slug, array_map('strtolower', $aliases), true)) {
-                return $aliases;
+            foreach ($aliases as $alias) {
+                $alias = strtolower(trim($alias));
+                if ($alias !== '' && ($slug === $alias || strpos($slug, $alias) !== false)) {
+                    return $aliases;
+                }
             }
         }
 
@@ -402,6 +405,14 @@ final class BTL_GraphQL
                 'value'    => ['type' => 'String'],
                 'slug'     => ['type' => 'String'],
                 'flagUrl'  => ['type' => 'String'],
+            ],
+        ]);
+
+        register_graphql_object_type('ProductArchivePricing', [
+            'fields' => [
+                'price' => ['type' => 'String'],
+                'regularPrice' => ['type' => 'String'],
+                'isAvailableInRegion' => ['type' => 'Boolean'],
             ],
         ]);
 
@@ -517,6 +528,19 @@ final class BTL_GraphQL
             },
         ]);
 
+        register_graphql_field('VariableProduct', 'archivePricing', [
+            'type' => 'ProductArchivePricing',
+            'args' => [
+                'regionSlug' => ['type' => 'String'],
+            ],
+            'resolve' => static function ($product, $args) {
+                return BTL_GraphQL::archive_pricing(
+                    (int)($product->databaseId ?? 0),
+                    (string)($args['regionSlug'] ?? 'eu')
+                );
+            },
+        ]);
+
         register_graphql_field('VariableProduct', 'variationCards', [
             'type' => ['list_of' => 'OptimizedVariationItem'],
             'resolve' => static function ($product) {
@@ -527,7 +551,7 @@ final class BTL_GraphQL
         register_graphql_field('LineItem', 'fulfillmentStatus', [
             'type' => 'String',
             'resolve' => static function ($item) {
-                $orderItem = WC_Order_Factory::get_order_item($item->databaseId ?? 0);
+                $orderItem = btl_get_order_item_cached($item->databaseId ?? 0);
 
                 return $orderItem
                     ? ($orderItem->get_meta('_fulfillment_status') ?: 'queued')
@@ -835,7 +859,7 @@ final class BTL_GraphQL
                     throw new GraphQL\Error\UserError('این سفارش هنوز آماده تحویل نیست.');
                 }
 
-                $item = WC_Order_Factory::get_order_item($itemId);
+                $item = btl_get_order_item_cached($itemId);
 
                 if (!$item || (int)$item->get_order_id() !== $orderId) {
                     throw new GraphQL\Error\UserError('آیتم نامعتبر است.');
@@ -1252,6 +1276,191 @@ final class BTL_GraphQL
         ]);
     }
 
+    public static function invalidate_archive_pricing(int $product_id): void
+    {
+        $product_id = (int)$product_id;
+        if ($product_id < 1) return;
+
+        foreach (['eu', 'us', 'tr', 'ua'] as $region) {
+            BTL_Cache::delete(
+                'archive_pricing_' . $product_id . '_' . md5(strtolower($region)),
+                'btl'
+            );
+        }
+    }
+
+    private static function parse_price_value($value): ?float
+    {
+        $value = trim((string)$value);
+
+        if ($value === '' || strtolower($value) === 'disabled') {
+            return null;
+        }
+
+        $parts = preg_split('/[-–—]|&ndash;/u', $value);
+        $value = trim((string)($parts[0] ?? $value));
+
+        $value = strtr($value, [
+            '۰' => '0', '۱' => '1', '۲' => '2', '۳' => '3', '۴' => '4',
+            '۵' => '5', '۶' => '6', '۷' => '7', '۸' => '8', '۹' => '9',
+            '٠' => '0', '١' => '1', '٢' => '2', '٣' => '3', '٤' => '4',
+            '٥' => '5', '٦' => '6', '٧' => '7', '٨' => '8', '٩' => '9',
+        ]);
+
+        $numeric = preg_replace('/[^0-9]/', '', $value);
+
+        return $numeric === '' ? null : (float)$numeric;
+    }
+
+    public static function archive_pricing(int $product_id, string $region_slug): array
+    {
+        $product_id = (int)$product_id;
+        $region_slug = trim($region_slug) !== '' ? trim($region_slug) : 'eu';
+        $regionAliases = self::region_aliases($region_slug);
+        $region_slug = strtolower(trim((string)($regionAliases[0] ?? $region_slug)));
+
+        return BTL_Cache::remember(
+            'archive_pricing_' . $product_id . '_' . md5(strtolower($region_slug)),
+            static function () use ($product_id, $region_slug): array {
+                $product = wc_get_product($product_id);
+                if (!$product || !$product->is_type('variable')) {
+                    return [
+                        'price' => null,
+                        'regularPrice' => null,
+                        'isAvailableInRegion' => false,
+                    ];
+                }
+
+                $children = array_values(array_filter(array_map('intval', (array)$product->get_children())));
+                if (!$children) {
+                    return [
+                        'price' => null,
+                        'regularPrice' => null,
+                        'isAvailableInRegion' => false,
+                    ];
+                }
+
+                $stockCounts = [];
+                if (class_exists('BTL_CdKey_Stock')) {
+                    // The CdKeyStock resolver batches this into one GROUP BY query per product.
+                    foreach ($children as $variationId) {
+                        $stockCounts[$variationId] = BTL_CdKey_Stock::cachedAvailableCount($product_id, $variationId);
+                    }
+                }
+
+                $targetAliases = self::region_aliases($region_slug);
+                $targetAliasLookup = array_fill_keys(array_map('strtolower', $targetAliases), true);
+
+                $global = [
+                    'direct' => null,
+                    'gift' => null,
+                    'code' => null,
+                    'hasDirectPrice' => false,
+                    'hasGiftOrCode' => false,
+                ];
+                $region = [
+                    'direct' => null,
+                    'gift' => null,
+                    'code' => null,
+                    'hasDirectPrice' => false,
+                    'hasGiftOrCode' => false,
+                ];
+                $hasRegionAttr = false;
+                $regionVariationCount = 0;
+
+                $updateTier = static function (&$tier, $price, $regular): void {
+                    $price = self::parse_price_value($price);
+                    if ($price === null || $price <= 0) return;
+                    $regular = self::parse_price_value($regular);
+                    if ($regular === null || $regular <= 0) $regular = $price;
+                    if ($tier === null || $price < $tier['price']) {
+                        $tier = ['price' => $price, 'regularPrice' => $regular];
+                    }
+                };
+
+                foreach ($children as $variationId) {
+                    $variation = wc_get_product($variationId);
+                    if (!$variation) continue;
+
+                    $manualGift = $variation->get_meta('_gift_price_toman');
+                    $manualCode = $variation->get_meta('_code_price_toman');
+                    $giftPrice = $manualGift !== '' ? $manualGift : $variation->get_meta('giftPriceToman');
+                    $giftRegular = $manualGift !== '' ? $manualGift : $variation->get_meta('giftRegularPriceToman');
+                    $codePrice = $manualCode !== '' ? $manualCode : $variation->get_meta('codePriceToman');
+                    $codeRegular = $manualCode !== '' ? $manualCode : $variation->get_meta('codeRegularPriceToman');
+
+                    $giftPriceValue = self::parse_price_value($giftPrice);
+                    $giftRegularValue = self::parse_price_value($giftRegular);
+                    $codePriceValue = self::parse_price_value($codePrice);
+                    $codeRegularValue = self::parse_price_value($codeRegular);
+
+                    $directPrice = $variation->get_price();
+                    $directRegular = $variation->get_regular_price();
+                    $hasCodeStock = ((int)($stockCounts[$variationId] ?? 0)) > 0;
+                    $directPriceValue = self::parse_price_value($directPrice);
+                    $directRegularValue = self::parse_price_value($directRegular);
+                    $directValid = $directPriceValue !== null && $directPriceValue > 0;
+                    $giftValid = $giftPriceValue !== null && $giftPriceValue > 0;
+                    $codeValid = $codePriceValue !== null && $codePriceValue > 0 && $hasCodeStock;
+                    $anyGiftOrCode = $giftPriceValue !== null || $codePriceValue !== null;
+
+                    if ($directValid) {
+                        $global['hasDirectPrice'] = true;
+                        $updateTier($global['direct'], $directPrice, $directRegular);
+                    }
+                    if ($anyGiftOrCode) $global['hasGiftOrCode'] = true;
+                    if ($giftValid) $updateTier($global['gift'], $giftPrice, $giftRegular);
+                    if ($codeValid) $updateTier($global['code'], $codePrice, $codeRegular);
+
+                    $matchesRegion = false;
+                    $variationHasRegion = false;
+                    foreach ((array)$variation->get_variation_attributes() as $key => $value) {
+                        $taxonomy = str_replace('attribute_', '', (string)$key);
+                        if (stripos($taxonomy, 'region') === false && stripos($taxonomy, 'ریجن') === false) continue;
+                        $value = trim((string)$value);
+                        if ($value === '') continue;
+                        $variationHasRegion = true;
+                        $aliases = self::region_aliases($value);
+                        $matchesRegion = (bool)array_intersect(array_keys($targetAliasLookup), array_map('strtolower', $aliases));
+                        break;
+                    }
+
+                    if (!$variationHasRegion) {
+                        // Generic variations are part of the global fallback only.
+                        continue;
+                    }
+
+                    $hasRegionAttr = true;
+                    if (!$matchesRegion) continue;
+                    $regionVariationCount++;
+
+                    if ($directValid) {
+                        $region['hasDirectPrice'] = true;
+                        $updateTier($region['direct'], $directPrice, $directRegular);
+                    }
+                    if ($anyGiftOrCode) $region['hasGiftOrCode'] = true;
+                    if ($giftValid) $updateTier($region['gift'], $giftPrice, $giftRegular);
+                    if ($codeValid) $updateTier($region['code'], $codePrice, $codeRegular);
+                }
+
+                $target = $regionVariationCount > 0 ? $region : $global;
+                $picked = $target['direct'] ?? $target['gift'] ?? $target['code'] ?? null;
+
+                $available = $hasRegionAttr
+                    ? $regionVariationCount > 0 && ($target['hasDirectPrice'] || $target['hasGiftOrCode'])
+                    : ($target['hasDirectPrice'] || $target['hasGiftOrCode'] || $picked !== null);
+
+                return [
+                    'price' => $picked !== null ? (string)$picked['price'] : null,
+                    'regularPrice' => $picked !== null ? (string)$picked['regularPrice'] : null,
+                    'isAvailableInRegion' => (bool)$available,
+                ];
+            },
+            'btl',
+            HOUR_IN_SECONDS
+        );
+    }
+
     public static function variation_cards(int $product_id): array
     {
         return BTL_Cache::remember("variations_{$product_id}", static function () use ($product_id) {
@@ -1303,6 +1512,9 @@ final class BTL_GraphQL
         }
 
         return [
+            // Internal resolver context used by CdKeyStock::codeStockCount.
+            // It is not exposed unless a GraphQL field explicitly asks for it.
+            'productId'             => $parent->get_id(),
             'databaseId'            => $variation->get_id(),
             'name'                  => $variation->get_name(),
             'slug'                  => $parent->get_slug(),

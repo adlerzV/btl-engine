@@ -86,6 +86,20 @@ function btl_autoload_core_class(string $class): void
 
 spl_autoload_register('btl_autoload_core_class');
 
+/**
+ * Request-local WooCommerce order-item lookup cache.
+ * Avoids loading the same order item repeatedly from separate GraphQL
+ * resolvers during a single request without persisting mutable order objects.
+ */
+function btl_get_order_item_cached(int $itemId)
+{
+    static $cache = [];
+    $itemId = (int)$itemId;
+    if ($itemId < 1) return null;
+    if (array_key_exists($itemId, $cache)) return $cache[$itemId];
+    return $cache[$itemId] = WC_Order_Factory::get_order_item($itemId);
+}
+
 // Core hooks are registered with class callables instead of eagerly booting every class.
 // WordPress will invoke/autoload the class only when the corresponding event actually fires.
 

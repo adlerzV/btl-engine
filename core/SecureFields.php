@@ -8,6 +8,9 @@ final class BTL_Secure_Fields
     private const READY_OPTION = 'btl_secure_fields_table_ready_v2';
     private const ACTIVE_STATUS = 'active';
 
+    /** @var array<string, array<int, int>> */
+    private static array $orderFieldCountCache = [];
+
 
     public static function maybe_install(): void { BTL_Helpers::ensureTable(self::READY_OPTION, [self::class, 'install']); }
     public static function table(): string { global $wpdb; return $wpdb->prefix . 'btl_secure_fields'; }
@@ -29,6 +32,7 @@ final class BTL_Secure_Fields
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
             KEY order_id (order_id),
+            KEY order_field_status_item (order_id, field_type, status, item_id),
             KEY item_id (item_id),
             UNIQUE KEY source_identity (order_id, item_id, field_type, source_key),
             UNIQUE KEY cdkey_value (value_fingerprint)
@@ -58,6 +62,9 @@ final class BTL_Secure_Fields
                 $orderId, $itemId, $fieldType, $sourceKey, self::ACTIVE_STATUS, $fingerprint, $ciphertext, current_time('mysql', true)
             ));
             if ($inserted === false) return false;
+
+            self::invalidateCountCache($orderId, $fieldType);
+
             if ((int)$inserted === 1) return true;
 
             return (bool)$wpdb->get_var($wpdb->prepare(
@@ -72,7 +79,9 @@ final class BTL_Secure_Fields
              VALUES (%d,%d,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE ciphertext=VALUES(ciphertext), status=VALUES(status)",
             $orderId, $itemId, $fieldType, $sourceKey, self::ACTIVE_STATUS, $ciphertext, current_time('mysql', true)
         );
-        return $wpdb->query($sql) !== false;
+        $ok = $wpdb->query($sql) !== false;
+        if ($ok) self::invalidateCountCache($orderId, $fieldType);
+        return $ok;
     }
 
     public static function exists(int $orderId, int $itemId, string $fieldType): bool
@@ -89,13 +98,51 @@ final class BTL_Secure_Fields
         ));
     }
 
+    /**
+     * Returns all active counts for one order/field in a single query.
+     * The result is memoized for the current PHP request so GraphQL line-item
+     * resolvers do not issue one COUNT query per item.
+     *
+     * @return array<int, int> item ID => active row count
+     */
+    public static function countsByOrder(int $orderId, string $fieldType): array
+    {
+        $orderId = (int)$orderId;
+        $fieldType = (string)$fieldType;
+        if ($orderId < 1 || $fieldType === '') return [];
+
+        $cacheKey = $orderId . ':' . $fieldType;
+        if (array_key_exists($cacheKey, self::$orderFieldCountCache)) {
+            return self::$orderFieldCountCache[$cacheKey];
+        }
+
+        global $wpdb;
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT item_id, COUNT(*) AS row_count
+             FROM " . self::table() . "
+             WHERE order_id=%d AND field_type=%s AND status=%s
+             GROUP BY item_id",
+            $orderId, $fieldType, self::ACTIVE_STATUS
+        ));
+
+        $counts = [];
+        foreach ($rows ?: [] as $row) {
+            $counts[(int)$row->item_id] = (int)$row->row_count;
+        }
+
+        self::$orderFieldCountCache[$cacheKey] = $counts;
+        return $counts;
+    }
+
     public static function countByOrderItem(int $orderId, int $itemId, string $fieldType): int
     {
-        global $wpdb;
-        return (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM " . self::table() . " WHERE order_id=%d AND item_id=%d AND field_type=%s AND status=%s",
-            $orderId, $itemId, $fieldType, self::ACTIVE_STATUS
-        ));
+        $counts = self::countsByOrder($orderId, $fieldType);
+        return (int)($counts[(int)$itemId] ?? 0);
+    }
+
+    private static function invalidateCountCache(int $orderId, string $fieldType): void
+    {
+        unset(self::$orderFieldCountCache[((int)$orderId) . ':' . (string)$fieldType]);
     }
 
     public static function revealAllForCustomerCdKey(int $orderId, int $itemId, int $userId): array
@@ -158,13 +205,21 @@ final class BTL_Secure_Fields
     public static function deleteByOrder(int $orderId): int
     {
         global $wpdb;
-        return (int) $wpdb->delete(self::table(), ['order_id' => $orderId], ['%d']);
+        $deleted = (int) $wpdb->delete(self::table(), ['order_id' => $orderId], ['%d']);
+        foreach (array_merge([self::CDKEY_TYPE], self::CREDENTIAL_TYPES) as $fieldType) {
+            self::invalidateCountCache($orderId, $fieldType);
+        }
+        return $deleted;
     }
 
     public static function wipeCredentialsByOrder(int $orderId): int
     {
         global $wpdb;
         $placeholders = implode(',', array_fill(0, count(self::CREDENTIAL_TYPES), '%s'));
-        return (int) $wpdb->query($wpdb->prepare("DELETE FROM " . self::table() . " WHERE order_id=%d AND field_type IN ({$placeholders})", array_merge([$orderId], self::CREDENTIAL_TYPES)));
+        $deleted = (int) $wpdb->query($wpdb->prepare("DELETE FROM " . self::table() . " WHERE order_id=%d AND field_type IN ({$placeholders})", array_merge([$orderId], self::CREDENTIAL_TYPES)));
+        foreach (self::CREDENTIAL_TYPES as $fieldType) {
+            self::invalidateCountCache($orderId, $fieldType);
+        }
+        return $deleted;
     }
 }

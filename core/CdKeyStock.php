@@ -103,15 +103,56 @@ final class BTL_CdKey_Stock
         global $wpdb;
         return (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . self::table() . " WHERE product_id=%d AND variation_id=%d AND status='available'", $productId, $variationId));
     }
+
+    /**
+     * Batch-load available code-key counts for every variation of one product.
+     * This keeps the product detail GraphQL resolver at one stock query instead
+     * of one COUNT(*) query per variation.
+     *
+     * @return array<int, int> variation ID => available count
+     */
+    private static function cachedAvailableCountsForProduct(int $productId): array
+    {
+        if ($productId < 1) return [];
+
+        return (array) BTL_Cache::remember(
+            "stock_counts_product_{$productId}",
+            static function () use ($productId): array {
+                global $wpdb;
+                $rows = $wpdb->get_results($wpdb->prepare(
+                    "SELECT variation_id, COUNT(*) AS row_count
+                     FROM " . self::table() . "
+                     WHERE product_id=%d AND status='available'
+                     GROUP BY variation_id",
+                    $productId
+                ));
+
+                $counts = [];
+                foreach ($rows ?: [] as $row) {
+                    $counts[(int)$row->variation_id] = (int)$row->row_count;
+                }
+
+                return $counts;
+            },
+            self::STOCK_DISPLAY_CACHE_GROUP,
+            self::STOCK_DISPLAY_TTL
+        );
+    }
+
     public static function cachedAvailableCount(int $productId, int $variationId): int
     {
         if ($productId < 1 || $variationId < 1) return 0;
-        return (int) BTL_Cache::remember("stock_count_{$productId}_{$variationId}", static fn() => self::availableCount($productId, $variationId), self::STOCK_DISPLAY_CACHE_GROUP, self::STOCK_DISPLAY_TTL);
+        $counts = self::cachedAvailableCountsForProduct($productId);
+        return (int)($counts[$variationId] ?? 0);
     }
     private static function invalidateStockCache(int $productId, int $variationId): void
     {
         BTL_Cache::delete("stock_count_{$productId}_{$variationId}", self::STOCK_DISPLAY_CACHE_GROUP);
+        BTL_Cache::delete("stock_counts_product_{$productId}", self::STOCK_DISPLAY_CACHE_GROUP);
         BTL_Cache::flushGroup(self::STOCK_DISPLAY_CACHE_GROUP);
+        if (class_exists('BTL_GraphQL')) {
+            BTL_GraphQL::invalidate_archive_pricing($productId);
+        }
     }
 
     public static function reserveForOrder(int $orderId, array $requirements, string $token): bool
@@ -257,7 +298,7 @@ final class BTL_CdKey_Stock
         $itemIds = $wpdb->get_col($wpdb->prepare("SELECT oi.order_item_id FROM {$wpdb->prefix}woocommerce_order_items oi INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta pm ON pm.order_item_id=oi.order_item_id AND pm.meta_key='_product_id' AND pm.meta_value=%d LEFT JOIN {$wpdb->prefix}woocommerce_order_itemmeta vm ON vm.order_item_id=oi.order_item_id AND vm.meta_key='_variation_id' WHERE oi.order_item_type='line_item' AND COALESCE(vm.meta_value,0)=%d AND oi.order_item_id>%d ORDER BY oi.order_item_id ASC LIMIT %d", $productId, $variationId, $afterItemId, self::BACKFILL_LIMIT));
         $stockExhausted = false;
         foreach ($itemIds ?: [] as $itemId) {
-            $item = WC_Order_Factory::get_order_item((int)$itemId);
+            $item = btl_get_order_item_cached((int)$itemId);
             if (!$item || $item->get_meta('روش تحویل') !== 'code') continue;
             $order = wc_get_order($item->get_order_id());
             if (!$order || !in_array($order->get_status(), ['processing','completed'], true)) continue;
@@ -287,7 +328,7 @@ final class BTL_CdKey_Stock
 
     public static function storeManualAssignment(int $orderId, int $itemId, string $plaintext, bool $allowUnpaid = false): bool
     {
-        $item = WC_Order_Factory::get_order_item($itemId);
+        $item = btl_get_order_item_cached($itemId);
         if (!$item || (int)$item->get_order_id() !== $orderId || $item->get_meta('روش تحویل') !== 'code') return false;
         $order = wc_get_order($orderId);
         if (!$order || (!$allowUnpaid && !in_array($order->get_status(), ['processing', 'completed'], true))) return false;
@@ -380,7 +421,7 @@ final class BTL_CdKey_Stock
     public static function register(): void
     {
         register_graphql_field('OptimizedVariationItem', 'codeStockCount', ['type'=>'Int','resolve'=>static function($source) { $productId=(int)($source['productId']??0); $variationId=(int)($source['databaseId']??0); return self::cachedAvailableCount($productId,$variationId); }]);
-        register_graphql_field('LineItem', 'cdkeyReady', ['type'=>'Boolean','resolve'=>static function($source) { $itemId=(int)($source->databaseId??0); $item=WC_Order_Factory::get_order_item($itemId); if(!$item)return false; return BTL_Secure_Fields::countByOrderItem((int)$item->get_order_id(),$itemId,'cdkey') >= max(1,(int)$item->get_quantity()); }]);
-        register_graphql_field('LineItem', 'cdkeyAssignedCount', ['type'=>'Int','resolve'=>static function($source) { $itemId=(int)($source->databaseId??0); $item=WC_Order_Factory::get_order_item($itemId); return $item ? BTL_Secure_Fields::countByOrderItem((int)$item->get_order_id(),$itemId,'cdkey') : 0; }]);
+        register_graphql_field('LineItem', 'cdkeyReady', ['type'=>'Boolean','resolve'=>static function($source) { $itemId=(int)($source->databaseId??0); $item=btl_get_order_item_cached($itemId); if(!$item)return false; return BTL_Secure_Fields::countByOrderItem((int)$item->get_order_id(),$itemId,'cdkey') >= max(1,(int)$item->get_quantity()); }]);
+        register_graphql_field('LineItem', 'cdkeyAssignedCount', ['type'=>'Int','resolve'=>static function($source) { $itemId=(int)($source->databaseId??0); $item=btl_get_order_item_cached($itemId); return $item ? BTL_Secure_Fields::countByOrderItem((int)$item->get_order_id(),$itemId,'cdkey') : 0; }]);
     }
 }

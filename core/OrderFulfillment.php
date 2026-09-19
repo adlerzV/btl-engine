@@ -77,7 +77,7 @@ final class BTL_Order_Fulfillment
         if (!$itemId || !$orderId || $key === '') wp_send_json_error('ورودی نامعتبر', 400);
         if (!wp_verify_nonce($_POST['nonce'] ?? '', 'btl_cdkey_' . $itemId)) wp_send_json_error('نشست نامعتبر', 403);
 
-        $item = WC_Order_Factory::get_order_item($itemId);
+        $item = btl_get_order_item_cached($itemId);
         if (!$item || (int)$item->get_order_id() !== $orderId) wp_send_json_error('آیتم نامعتبر', 404);
 
         if (!BTL_CdKey_Stock::storeManualAssignment($orderId, $itemId, $key)) {
@@ -123,7 +123,7 @@ final class BTL_Order_Fulfillment
             wp_send_json_error('نشست نامعتبر', 403);
         }
 
-        $item = WC_Order_Factory::get_order_item($itemId);
+        $item = btl_get_order_item_cached($itemId);
         if (!$item || (int)$item->get_order_id() !== $orderId) {
             wp_send_json_error('آیتم نامعتبر', 404);
         }

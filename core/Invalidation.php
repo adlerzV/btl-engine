@@ -588,6 +588,10 @@ final class BTL_Invalidation
             }
 
             wp_cache_delete("variations_{$productId}", 'btl');
+
+            if (class_exists('BTL_GraphQL')) {
+                BTL_GraphQL::invalidate_archive_pricing($productId);
+            }
         }
 
         if (in_array(self::SCOPE_CONTENT, $parts, true)) {

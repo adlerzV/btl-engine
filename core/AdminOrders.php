@@ -269,6 +269,7 @@ final class BTL_Admin_Orders
         $allCompleted = true;
         $anyProgress = false;
         $customerId = (int)$order->get_customer_id();
+        $cdkeyCounts = BTL_Secure_Fields::countsByOrder((int)$order->get_id(), 'cdkey');
 
         foreach ($order->get_items('line_item') as $itemId => $item) {
             if (!$item instanceof WC_Order_Item_Product) {
@@ -281,7 +282,7 @@ final class BTL_Admin_Orders
             $status = 'queued';
 
             if ($delivery === 'code') {
-                $delivered = (int)BTL_Secure_Fields::countByOrderItem((int)$order->get_id(), (int)$itemId, 'cdkey');
+                $delivered = (int)($cdkeyCounts[(int)$itemId] ?? 0);
                 $delivered = min($delivered, $quantity);
                 $status = $delivered >= $quantity ? 'completed' : ($delivered > 0 ? 'processing' : 'queued');
             } else {

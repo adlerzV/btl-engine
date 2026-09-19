@@ -3,6 +3,8 @@ defined('ABSPATH') || exit;
 
 final class BTL_Customer_Orders
 {
+    private const MAX_CART_QUANTITY = 10;
+
     private const READY_OPTION = 'btl_checkout_requests_table_ready';
     public static function boot(): void
     {
@@ -72,7 +74,9 @@ final class BTL_Customer_Orders
         foreach ($lineItems as $li) {
             $line = self::validateLine((array)$li);
             $totalQuantity += (int)$line['quantity'];
-            if ($totalQuantity > 10) throw new GraphQL\Error\UserError('سقف خرید ۱۰ عدد می‌باشد.');
+            if ($totalQuantity > self::MAX_CART_QUANTITY) {
+                throw new GraphQL\Error\UserError('سقف خرید ' . self::MAX_CART_QUANTITY . ' عدد می‌باشد.');
+            }
             $validated[] = $line;
         }
 
