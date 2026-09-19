@@ -7,6 +7,7 @@ final class BTL_Sessions
 {
     private const REGISTER_SESSION_CANONICAL = 'mutation RegisterSession($sessionId:String!,$deviceLabel:String,$ipAddress:String,$userAgent:String){registerSession(input:{sessionId:$sessionId,deviceLabel:$deviceLabel,ipAddress:$ipAddress,userAgent:$userAgent}){success isStaff}}';
     private const TOUCH_SESSION_CANONICAL = 'mutation TouchSession($sessionId:String!){touchSession(input:{sessionId:$sessionId}){success}}';
+    private const REVOKE_CURRENT_SESSION_CANONICAL = 'mutation RevokeCurrentSession{revokeCurrentSession{success}}';
     private const READY_OPTION = 'btl_sessions_table_ready_v2';
     private const SESSION_INACTIVITY_DAYS = 30;
     /** @var array<string,bool> */
@@ -131,6 +132,21 @@ final class BTL_Sessions
             },
         ]);
 
+        register_graphql_mutation('revokeCurrentSession', [
+            'inputFields' => [],
+            'outputFields' => ['success' => ['type' => 'Boolean']],
+            'mutateAndGetPayload' => function () {
+                if (!is_user_logged_in()) throw new UserError('باید وارد شوید.');
+                try {
+                    $success = self::revokeCurrentToken(get_current_user_id());
+                    return ['success' => $success];
+                } catch (Throwable $e) {
+                    BTL_Helpers::logger('revokeCurrentSession error: ' . $e->getMessage());
+                    return ['success' => false];
+                }
+            },
+        ]);
+
         register_graphql_mutation('revokeSession', [
             'inputFields' => ['sessionId' => ['type' => ['non_null' => 'String']]],
             'outputFields' => ['success' => ['type' => 'Boolean']],
@@ -204,6 +220,19 @@ final class BTL_Sessions
         ));
         if ($updated === false || $updated < 1) throw new RuntimeException('session_touch_failed');
         self::clearRequestSessionCache();
+    }
+
+    private static function revokeCurrentToken(int $userId): bool
+    {
+        global $wpdb;
+        $tokenHash = self::currentTokenHash();
+        if ($userId < 1 || $tokenHash === '') return false;
+        $updated = $wpdb->query($wpdb->prepare(
+            "UPDATE " . self::table() . " SET revoked=1 WHERE user_id=%d AND token_hash=%s AND revoked=0",
+            $userId, $tokenHash
+        ));
+        self::clearRequestSessionCache();
+        return $updated !== false && $updated > 0;
     }
 
     public static function revoke(int $userId, string $sessionId): void
@@ -339,12 +368,21 @@ final class BTL_Sessions
         $hasPreviousAuthorization = isset($_SERVER['HTTP_X_BTL_PREVIOUS_AUTHORIZATION'])
             && $_SERVER['HTTP_X_BTL_PREVIOUS_AUTHORIZATION'] !== '';
 
-        $canonicalQuery = self::canonicalizeBootstrapMutation($query);
-        if ($hasBootstrapProof && hash_equals(self::REGISTER_SESSION_CANONICAL, $canonicalQuery)) {
-            return $requestData;
+        if ($hasBootstrapProof) {
+            $canonicalQuery = self::canonicalizeBootstrapMutation($query);
+            if (hash_equals(self::REGISTER_SESSION_CANONICAL, $canonicalQuery)) {
+                return $requestData;
+            }
         }
 
-        if ($hasPreviousAuthorization && hash_equals(self::TOUCH_SESSION_CANONICAL, $canonicalQuery)) {
+        if ($hasPreviousAuthorization) {
+            $canonicalQuery = self::canonicalizeBootstrapMutation($query);
+            if (hash_equals(self::TOUCH_SESSION_CANONICAL, $canonicalQuery)) {
+                return $requestData;
+            }
+        }
+
+        if (self::currentTokenHash() !== '' && hash_equals(self::REVOKE_CURRENT_SESSION_CANONICAL, trim($query))) {
             return $requestData;
         }
 

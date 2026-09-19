@@ -11,6 +11,7 @@ final class BTL_Login_Throttle
 
     public static function boot(): void
     {
+        add_action('btl_login_attempts_cleanup', [self::class, 'cleanupExpired']);
     }
 
     public static function maybe_install(): void
@@ -29,10 +30,31 @@ final class BTL_Login_Throttle
             ip_address VARCHAR(45) NOT NULL,
             created_at DATETIME NOT NULL,
             PRIMARY KEY  (id),
-            KEY identifier_created (identifier, created_at)
+            KEY identifier_created (identifier, created_at),
+            KEY created_at (created_at)
         ) {$charset};";
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
         dbDelta($sql);
+    }
+
+    public static function schedule_cleanup(): void
+    {
+        if (function_exists('as_next_scheduled_action') && function_exists('as_schedule_recurring_action')) {
+            if (!as_next_scheduled_action('btl_login_attempts_cleanup', [], 'btl')) {
+                as_schedule_recurring_action(time() + 300, 21600, 'btl_login_attempts_cleanup', [], 'btl');
+            }
+        } elseif (!wp_next_scheduled('btl_login_attempts_cleanup')) {
+            wp_schedule_event(time() + 300, 'twicedaily', 'btl_login_attempts_cleanup');
+        }
+    }
+
+    public static function cleanupExpired(int $limit = 5000): int
+    {
+        global $wpdb;
+        return (int)$wpdb->query($wpdb->prepare(
+            "DELETE FROM " . self::table() . " WHERE created_at < UTC_TIMESTAMP() - INTERVAL 2 DAY LIMIT %d",
+            max(100, min($limit, 10000))
+        ));
     }
 
     public static function assertAllowed(string $identifier, string $ip): void

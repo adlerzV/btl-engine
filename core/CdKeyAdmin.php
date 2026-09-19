@@ -24,7 +24,7 @@ final class BTL_CdKey_Admin
         try {
             $variationId = $variation->get_id();
             $productId = $variation->get_parent_id();
-            $count = BTL_CdKey_Stock::availableCount($productId, $variationId);
+            $count = BTL_CdKey_Stock::cachedAvailableCount($productId, $variationId);
             $nonce = wp_create_nonce('btl_cdkey_stock_' . $variationId);
         } catch (Throwable $e) {
             BTL_Helpers::logger('CdKeyAdmin::render_stock_box failed: ' . $e->getMessage());

@@ -18,6 +18,7 @@ final class BTL_Otp
 
     public static function boot(): void
     {
+        add_action('btl_otp_cleanup', [self::class, 'cleanupExpired']);
     }
 
     public static function maybe_install(): void
@@ -43,10 +44,31 @@ final class BTL_Otp
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY  (id),
             KEY identifier_purpose (identifier, purpose),
+            KEY ip_created (ip_address, created_at),
             KEY created_at (created_at)
         ) {$charset};";
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
         dbDelta($sql);
+    }
+
+    public static function schedule_cleanup(): void
+    {
+        if (function_exists('as_next_scheduled_action') && function_exists('as_schedule_recurring_action')) {
+            if (!as_next_scheduled_action('btl_otp_cleanup', [], 'btl')) {
+                as_schedule_recurring_action(time() + 300, 21600, 'btl_otp_cleanup', [], 'btl');
+            }
+        } elseif (!wp_next_scheduled('btl_otp_cleanup')) {
+            wp_schedule_event(time() + 300, 'twicedaily', 'btl_otp_cleanup');
+        }
+    }
+
+    public static function cleanupExpired(int $limit = 5000): int
+    {
+        global $wpdb;
+        return (int)$wpdb->query($wpdb->prepare(
+            "DELETE FROM " . self::table() . " WHERE created_at < UTC_TIMESTAMP() - INTERVAL 2 DAY LIMIT %d",
+            max(100, min($limit, 10000))
+        ));
     }
 
     public static function request(string $identifier, string $channel, string $purpose, string $ip, callable $sendFn): void

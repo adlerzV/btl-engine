@@ -44,7 +44,7 @@ final class BTL_CdKey_Stock
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
             UNIQUE KEY unique_plaintext (key_fingerprint),
-            KEY product_variation_status (product_id, variation_id, status, id),
+            KEY product_variation_status (product_id, variation_id, status),
             KEY order_item_status (order_id, item_id, status),
             KEY reservation_status (reservation_token, status)
         ) " . $wpdb->get_charset_collate() . ' ENGINE=InnoDB;';
@@ -88,14 +88,55 @@ final class BTL_CdKey_Stock
 
     public static function bulkAdd(int $productId, int $variationId, array $plaintextKeys, int $staffUserId): int
     {
-        $count = 0;
-        foreach ($plaintextKeys as $key) if (self::add($productId, $variationId, (string) $key, $staffUserId, false)) $count++;
-        if ($count > 0) {
+        global $wpdb;
+        if ($productId < 1 || $variationId < 1) return 0;
+
+        $rows = [];
+        foreach ($plaintextKeys as $rawKey) {
+            $plaintext = trim((string)$rawKey);
+            if ($plaintext === '') continue;
+            try {
+                $rows[] = [
+                    'product_id' => $productId,
+                    'variation_id' => $variationId,
+                    'ciphertext' => BTL_Secure_Vault::encrypt($plaintext),
+                    'key_fingerprint' => BTL_Secure_Vault::fingerprint($plaintext),
+                    'status' => 'available',
+                    'added_by' => $staffUserId ?: null,
+                ];
+            } catch (Throwable $e) {
+                BTL_Helpers::logger('CdKeyStock: bulk encryption failed');
+            }
+        }
+
+        $inserted = 0;
+        foreach (array_chunk($rows, 100) as $chunk) {
+            $valueSql = [];
+            $params = [];
+            foreach ($chunk as $row) {
+                $valueSql[] = '(%d,%d,%s,%s,%s,%d)';
+                $params[] = (int)$row['product_id'];
+                $params[] = (int)$row['variation_id'];
+                $params[] = (string)$row['ciphertext'];
+                $params[] = (string)$row['key_fingerprint'];
+                $params[] = (string)$row['status'];
+                $params[] = (int)($row['added_by'] ?? 0);
+            }
+
+            $sql = $wpdb->prepare(
+                "INSERT IGNORE INTO " . self::table() . " (product_id,variation_id,ciphertext,key_fingerprint,status,added_by) VALUES " . implode(',', $valueSql),
+                $params
+            );
+            $result = $wpdb->query($sql);
+            if ($result !== false) $inserted += (int)$result;
+        }
+
+        if ($inserted > 0) {
             self::invalidateStockCache($productId, $variationId);
             self::backfillPendingOrders($productId, $variationId);
             if (class_exists('BTL_Invalidation')) BTL_Invalidation::queueProduct($productId, BTL_Invalidation::SCOPE_PRICING);
         }
-        return $count;
+        return $inserted;
     }
 
     public static function availableCount(int $productId, int $variationId): int

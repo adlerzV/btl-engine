@@ -147,8 +147,9 @@ final class BTL_Admin_Tickets
                 $hasNext = count($posts) > $first;
                 if ($hasNext) $posts = array_slice($posts, 0, $first);
 
+                $claims = self::claimsForTickets(array_map(static fn(WP_Post $post): int => (int)$post->ID, $posts));
                 return [
-                    'nodes' => array_map([self::class, 'ticketPayload'], $posts),
+                    'nodes' => array_map(static fn(WP_Post $post): array => self::ticketPayload($post, $claims), $posts),
                     'pageInfo' => [
                         'hasNextPage' => $hasNext,
                         'endCursor' => BTL_Customer_Tickets::encodeCursor($offset + count($posts)),
@@ -328,7 +329,27 @@ final class BTL_Admin_Tickets
         return self::ticketPayload($post);
     }
 
-    private static function ticketPayload(WP_Post $post): array
+    private static function claimsForTickets(array $ticketIds): array
+    {
+        global $wpdb;
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ticketIds), static fn(int $id): bool => $id > 0)));
+        if (!$ids) return [];
+
+        $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+        $params = array_merge($ids, [gmdate('Y-m-d H:i:s')]);
+        $sql = $wpdb->prepare(
+            "SELECT ticket_id, expires_at FROM " . self::claimsTable() . " WHERE ticket_id IN ({$placeholders}) AND expires_at > %s",
+            $params
+        );
+        $rows = $wpdb->get_results($sql);
+        $claims = [];
+        foreach ($rows ?: [] as $row) {
+            $claims[(int)$row->ticket_id] = (string)$row->expires_at;
+        }
+        return $claims;
+    }
+
+    private static function ticketPayload(WP_Post $post, ?array $claims = null): array
     {
         $ticketId = (int)$post->ID;
         $customerId = (int)get_post_meta($ticketId, 'customer_id', true);
@@ -336,7 +357,7 @@ final class BTL_Admin_Tickets
         $customer = $customerId ? get_userdata($customerId) : null;
         $assignee = $assigneeId ? get_userdata($assigneeId) : null;
         global $wpdb;
-        $claim = $wpdb->get_row($wpdb->prepare("SELECT expires_at FROM " . self::claimsTable() . " WHERE ticket_id=%d AND expires_at > %s", $ticketId, gmdate('Y-m-d H:i:s')));
+        $claimExpiresAt = $claims !== null ? ($claims[$ticketId] ?? null) : (($wpdb->get_var($wpdb->prepare("SELECT expires_at FROM " . self::claimsTable() . " WHERE ticket_id=%d AND expires_at > %s", $ticketId, gmdate('Y-m-d H:i:s')))));
         return [
             'databaseId' => $ticketId,
             'title' => get_the_title($ticketId),
