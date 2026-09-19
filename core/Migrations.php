@@ -6,7 +6,7 @@ final class BTL_Migrations
     private const OPTION = 'btl_schema_version';
     private const ATTEMPT_OPTION = 'btl_schema_upgrade_attempt';
     private const RETRY_BACKOFF = 900;
-    private const VERSION = 6;
+    private const VERSION = 7;
 
     public static function boot(): void { add_action('init', [self::class, 'maybe_upgrade'], 4); }
     public static function maybe_upgrade(): void
@@ -39,6 +39,17 @@ final class BTL_Migrations
         }
         if($success && !self::backfill_cdkey_fingerprints())$success=false;
         if($success && !self::backfill_secure_cdkey_fingerprints())$success=false;
+        if(class_exists('BTL_Gold_Market')){
+            try{
+                BTL_Gold_Market::installBuyOrders();
+                BTL_Gold_Market::installProposals();
+                BTL_Gold_Market::installDeals();
+                BTL_Gold_Market::installPayouts();
+            }catch(Throwable $e){
+                $success=false;
+                BTL_Helpers::logger('Migration: Gold tables failed: '.$e->getMessage());
+            }
+        }
         if(class_exists('BTL_Notifications')&&is_callable(['BTL_Notifications','maybe_add_type_column'])){
             try{BTL_Notifications::maybe_add_type_column();}catch(Throwable $e){$success=false;BTL_Helpers::logger('Migration: notification type column update failed');}
         }
