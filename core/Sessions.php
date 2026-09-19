@@ -320,12 +320,30 @@ final class BTL_Sessions
         $tokenHash = self::currentTokenHash();
         if ($tokenHash === '' || trim($query) === '') return $requestData;
 
-        // The post-login bootstrap binds the freshly issued token. Refresh must
-        // bind the rotated token before any other operation can use it. Do not
-        // allow a bootstrap field to be combined with customer/order fields.
-        $bootstrapOnly = preg_match('/\b(?:registerSession|touchSession)\b/i', $query)
-            && !preg_match('/\b(?:customer|viewer|user|orders|order|lineItems|downloadableItems|myTickets|myTicket|myReviews|notifications|sessions|wishlistIds|adminPermissions|adminCan|paymentUrl|submitCustomerOrder|revealOrderSecret|adminOpenTickets|adminOpenTicketsCount|pendingReviewsCount|adminOrders|adminOrder|adminProcessingOrdersCount|adminTickets|adminTicket|adminCustomers|adminCustomer|adminReviews|adminNotifications|adminUnreadNotificationsCount|adminAddOrderNote|adminUpdateOrderStatus|adminUpdateOrderItemFulfillment|adminClaimTicket|adminReplyToTicket|adminAddTicketNote|adminSetTicketStatus|adminReassignTicket|adminModerateReview|adminReplyToReview|markAdminNotificationsRead|adminGoldBuyOrders|adminGoldProposals|adminGoldDeal|adminCreateGoldBuyOrder|adminClaimGoldProposal|adminStartGoldDeal|adminUpdateGoldDealStatus|adminConfirmGoldReceived|adminRecordGoldPayout|adminAddGoldStrike|goldBuyRequests|submitGoldProposal|toggleWishlistItem|updateCustomerProfile|updateUserAvatar|setPassword|replyToSupportTicket|submitSupportTicket|writeReview|editMyReview|deleteMyReview|writeBlogComment|replyToBlogComment|rateBlogPost|followBlogCategory|unfollowBlogCategory)\b/i', $query);
-        if ($bootstrapOnly) return $requestData;
+        // Bootstrap and refresh are the only authenticated requests that may
+        // establish a session binding before normal authorization. Keep these
+        // checks exact and cheap; the previous implementation scanned a very
+        // large resolver-name blacklist on every authenticated GraphQL request.
+        $hasBootstrapProof = isset($_SERVER['HTTP_X_BTL_SESSION_BOOTSTRAP'])
+            && $_SERVER['HTTP_X_BTL_SESSION_BOOTSTRAP'] !== '';
+        $hasPreviousAuthorization = isset($_SERVER['HTTP_X_BTL_PREVIOUS_AUTHORIZATION'])
+            && $_SERVER['HTTP_X_BTL_PREVIOUS_AUTHORIZATION'] !== '';
+
+        if ($hasBootstrapProof) {
+            $isRegisterSessionOnly = (bool) preg_match(
+                '/^\s*mutation(?:\s+[A-Za-z_][A-Za-z0-9_]*)?(?:\s*\([^{}]*\))?\s*\{\s*registerSession\s*\([^)]*\)\s*\{\s*success(?:\s+isStaff)?\s*\}\s*\}\s*$/s',
+                $query
+            );
+            if ($isRegisterSessionOnly) return $requestData;
+        }
+
+        if ($hasPreviousAuthorization) {
+            $isTouchSessionOnly = (bool) preg_match(
+                '/^\s*mutation(?:\s+[A-Za-z_][A-Za-z0-9_]*)?(?:\s*\([^{}]*\))?\s*\{\s*touchSession\s*\([^)]*\)\s*\{\s*success\s*\}\s*\}\s*$/s',
+                $query
+            );
+            if ($isTouchSessionOnly) return $requestData;
+        }
 
         if (!self::sessionExists(get_current_user_id(), self::requestSessionId(), true)) {
             // Keep the request syntactically valid but guaranteed to fail GraphQL
