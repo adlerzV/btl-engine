@@ -10,21 +10,7 @@ final class BTL_Invalidation
     private const LATEST_GRID_SIZE = 10;
     private const LATEST_CUTOFF_KEY = 'home_latest_cutoff';
 
-    private const PRICING_PROPS = [
-        'price',
-        'regular_price',
-        'sale_price',
-        'date_on_sale_from',
-        'date_on_sale_to',
-        'stock_quantity',
-        'stock_status',
-        'manage_stock',
-        'backorders',
-        'low_stock_amount',
-        'total_sales',
-        'children',
-        'variation_ids',
-    ];
+
 
     private static array $emittedTags = [];
 
@@ -340,25 +326,8 @@ final class BTL_Invalidation
             return self::SCOPE_ALL;
         }
 
-        $pricing = [
-            'base_currency_type',
-            'base_foreign_price',
-            'base_foreign_sale_price',
-            'priority_foreign_sale_price',
-            'foreign_sale_price_dates_from',
-            'foreign_sale_price_dates_to',
-            'gift_foreign_price_diff',
-            'code_foreign_price_diff',
-            '_gift_price_toman',
-            '_code_price_toman',
-        ];
-        $content = [
-            'short-notify',
-            'short_notify',
-            'secondary_gallery',
-            'content_matrix',
-            'description',
-        ];
+        $pricing = BTL_Pricing_Fields::acfPricingFields();
+        $content = BTL_Pricing_Fields::acfContentFields();
 
         $hasPricing = false;
         $hasContent = false;
@@ -393,7 +362,7 @@ final class BTL_Invalidation
         }
 
         foreach ($changes as $key) {
-            if (!in_array($key, self::PRICING_PROPS, true)) {
+            if (!in_array($key, BTL_Pricing_Fields::productPricingProps(), true)) {
                 return self::SCOPE_ALL;
             }
         }

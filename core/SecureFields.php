@@ -134,6 +134,53 @@ final class BTL_Secure_Fields
         return $counts;
     }
 
+    /**
+     * Returns active counts for multiple orders in one query.
+     *
+     * @param int[] $orderIds
+     * @return array<int, array<int, int>> order ID => item ID => count
+     */
+    public static function countsByOrders(array $orderIds, string $fieldType): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds), static fn(int $id): bool => $id > 0)));
+        $fieldType = (string)$fieldType;
+        if (!$ids || $fieldType === '') return [];
+
+        $result = [];
+        foreach ($ids as $id) {
+            $cacheKey = $id . ':' . $fieldType;
+            if (array_key_exists($cacheKey, self::$orderFieldCountCache)) {
+                $result[$id] = self::$orderFieldCountCache[$cacheKey];
+            }
+        }
+
+        $missing = array_values(array_filter($ids, static function (int $id) use ($result): bool {
+            return !array_key_exists($id, $result);
+        }));
+        if (!$missing) return $result;
+
+        global $wpdb;
+        $placeholders = implode(',', array_fill(0, count($missing), '%d'));
+        $sql = "SELECT order_id, item_id, COUNT(*) AS row_count
+                FROM " . self::table() . "
+                WHERE order_id IN ({$placeholders}) AND field_type=%s AND status=%s
+                GROUP BY order_id, item_id";
+        $rows = $wpdb->get_results($wpdb->prepare($sql, ...array_merge($missing, [$fieldType, self::ACTIVE_STATUS])));
+
+        foreach ($missing as $id) {
+            $result[$id] = [];
+        }
+        foreach ($rows ?: [] as $row) {
+            $orderId = (int)$row->order_id;
+            $itemId = (int)$row->item_id;
+            $result[$orderId][$itemId] = (int)$row->row_count;
+        }
+        foreach ($missing as $id) {
+            self::$orderFieldCountCache[$id . ':' . $fieldType] = $result[$id];
+        }
+        return $result;
+    }
+
     public static function countByOrderItem(int $orderId, int $itemId, string $fieldType): int
     {
         $counts = self::countsByOrder($orderId, $fieldType);

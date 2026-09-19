@@ -5,6 +5,8 @@ use GraphQL\Error\UserError;
 
 final class BTL_Sessions
 {
+    private const REGISTER_SESSION_CANONICAL = 'mutation RegisterSession($sessionId:String!,$deviceLabel:String,$ipAddress:String,$userAgent:String){registerSession(input:{sessionId:$sessionId,deviceLabel:$deviceLabel,ipAddress:$ipAddress,userAgent:$userAgent}){success isStaff}}';
+    private const TOUCH_SESSION_CANONICAL = 'mutation TouchSession($sessionId:String!){touchSession(input:{sessionId:$sessionId}){success}}';
     private const READY_OPTION = 'btl_sessions_table_ready_v2';
     private const SESSION_INACTIVITY_DAYS = 30;
     /** @var array<string,bool> */
@@ -313,6 +315,14 @@ final class BTL_Sessions
         return hash_equals($expected, $provided);
     }
 
+
+    private static function canonicalizeBootstrapMutation(string $query): string
+    {
+        $query = preg_replace('/#[^\r\n]*/', '', $query) ?? $query;
+        $query = preg_replace('/\s+/', ' ', trim($query)) ?? trim($query);
+        $query = preg_replace('/\s*([!$():=@\[\]{}{},])\s*/', '$1', $query) ?? $query;
+        return trim($query);
+    }
     public static function authorizeGraphqlRequest($requestData, $request = null)
     {
         if (!is_array($requestData)) return $requestData;
@@ -329,20 +339,13 @@ final class BTL_Sessions
         $hasPreviousAuthorization = isset($_SERVER['HTTP_X_BTL_PREVIOUS_AUTHORIZATION'])
             && $_SERVER['HTTP_X_BTL_PREVIOUS_AUTHORIZATION'] !== '';
 
-        if ($hasBootstrapProof) {
-            $isRegisterSessionOnly = (bool) preg_match(
-                '/^\s*mutation(?:\s+[A-Za-z_][A-Za-z0-9_]*)?(?:\s*\([^{}]*\))?\s*\{\s*registerSession\s*\([^)]*\)\s*\{\s*success(?:\s+isStaff)?\s*\}\s*\}\s*$/s',
-                $query
-            );
-            if ($isRegisterSessionOnly) return $requestData;
+        $canonicalQuery = self::canonicalizeBootstrapMutation($query);
+        if ($hasBootstrapProof && hash_equals(self::REGISTER_SESSION_CANONICAL, $canonicalQuery)) {
+            return $requestData;
         }
 
-        if ($hasPreviousAuthorization) {
-            $isTouchSessionOnly = (bool) preg_match(
-                '/^\s*mutation(?:\s+[A-Za-z_][A-Za-z0-9_]*)?(?:\s*\([^{}]*\))?\s*\{\s*touchSession\s*\([^)]*\)\s*\{\s*success\s*\}\s*\}\s*$/s',
-                $query
-            );
-            if ($isTouchSessionOnly) return $requestData;
+        if ($hasPreviousAuthorization && hash_equals(self::TOUCH_SESSION_CANONICAL, $canonicalQuery)) {
+            return $requestData;
         }
 
         if (!self::sessionExists(get_current_user_id(), self::requestSessionId(), true)) {

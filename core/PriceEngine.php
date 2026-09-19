@@ -36,13 +36,6 @@ final class BTL_Price_Engine
         bool $notify = true,
         ?array $currencies = null
     ): bool {
-        if (isset(self::$running[$product_id])) {
-            return false;
-        }
-
-        $guard_id = $product_id;
-        self::$running[$guard_id] = true;
-
         $pinned_id = 0;
 
         try {
@@ -66,6 +59,13 @@ final class BTL_Price_Engine
                     return false;
                 }
             }
+
+            if (isset(self::$running[$product_id])) {
+                return false;
+            }
+
+            $guard_id = $product_id;
+            self::$running[$guard_id] = true;
 
             $rates = self::rates();
 

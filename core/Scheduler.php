@@ -141,18 +141,7 @@ final class BTL_Scheduler
             return true;
         }
 
-        $pricing_fields = [
-            'base_currency_type',
-            'base_foreign_price',
-            'base_foreign_sale_price',
-            'priority_foreign_sale_price',
-            'foreign_sale_price_dates_from',
-            'foreign_sale_price_dates_to',
-            'gift_foreign_price_diff',
-            'code_foreign_price_diff',
-            '_gift_price_toman',
-            '_code_price_toman',
-        ];
+        $pricing_fields = BTL_Pricing_Fields::acfPricingFields();
 
         $fields = array_values(array_unique(self::$acfChanges[$product_id]));
         if (!$fields) {
@@ -161,13 +150,7 @@ final class BTL_Scheduler
 
         // Unknown fields remain conservative for compatibility. Known content-only
         // fields do not trigger a price calculation at all.
-        $known_content_fields = [
-            'short-notify',
-            'short_notify',
-            'secondary_gallery',
-            'content_matrix',
-            'description',
-        ];
+        $known_content_fields = BTL_Pricing_Fields::acfContentFields();
 
         foreach ($fields as $field) {
             if (in_array($field, $pricing_fields, true)) {

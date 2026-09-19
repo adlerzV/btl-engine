@@ -17,6 +17,7 @@ function btl_autoload_core_class(string $class): void
     if ($map === null) {
         $map = [
             'BTL_Helpers' => 'Helpers.php',
+            'BTL_Pricing_Fields' => 'PricingFields.php',
             'BTL_Cache' => 'Cache.php',
             'BTL_Invalidation' => 'Invalidation.php',
             'BTL_Price_Engine' => 'PriceEngine.php',

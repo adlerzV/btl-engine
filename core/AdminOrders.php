@@ -103,8 +103,14 @@ final class BTL_Admin_Orders
                     $orders = array_slice($orders, 0, $first);
                 }
 
+                $orderIds = array_map(static fn(WC_Order $order): int => (int)$order->get_id(), $orders);
+                $cdkeyCountsByOrder = BTL_Secure_Fields::countsByOrders($orderIds, 'cdkey');
+
                 return [
-                    'nodes' => array_map([self::class, 'orderPayload'], $orders),
+                    'nodes' => array_map(static function (WC_Order $order) use ($cdkeyCountsByOrder): array {
+                        $counts = $cdkeyCountsByOrder[(int)$order->get_id()] ?? [];
+                        return self::orderPayload($order, false, $counts);
+                    }, $orders),
                     'pageInfo' => [
                         'hasNextPage' => $hasNext,
                         'endCursor' => BTL_Customer_Tickets::encodeCursor($offset + count($orders)),
@@ -258,18 +264,18 @@ final class BTL_Admin_Orders
         }
     }
 
-    public static function payloadForExternal(WC_Order $order): array
+    public static function payloadForExternal(WC_Order $order, ?array $cdkeyCounts = null): array
     {
-        return self::orderPayload($order, false);
+        return self::orderPayload($order, false, $cdkeyCounts);
     }
 
-    private static function orderPayload(WC_Order $order, bool $detail = false): array
+    private static function orderPayload(WC_Order $order, bool $detail = false, ?array $cdkeyCounts = null): array
     {
         $items = [];
         $allCompleted = true;
         $anyProgress = false;
         $customerId = (int)$order->get_customer_id();
-        $cdkeyCounts = BTL_Secure_Fields::countsByOrder((int)$order->get_id(), 'cdkey');
+        $cdkeyCounts ??= BTL_Secure_Fields::countsByOrder((int)$order->get_id(), 'cdkey');
 
         foreach ($order->get_items('line_item') as $itemId => $item) {
             if (!$item instanceof WC_Order_Item_Product) {

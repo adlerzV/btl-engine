@@ -98,9 +98,14 @@ final class BTL_Admin_Customers
                     'order' => 'DESC',
                 ]);
 
+                $orderIds = array_map(static fn(WC_Order $order): int => (int)$order->get_id(), $orders);
+                $cdkeyCountsByOrder = BTL_Secure_Fields::countsByOrders($orderIds, 'cdkey');
+
                 return [
                     'customer' => self::customerPayloads([$user])[0],
-                    'orders' => array_map(static fn($order) => BTL_Admin_Orders::payloadForExternal($order), $orders),
+                    'orders' => array_map(static function (WC_Order $order) use ($cdkeyCountsByOrder): array {
+                        return BTL_Admin_Orders::payloadForExternal($order, $cdkeyCountsByOrder[(int)$order->get_id()] ?? []);
+                    }, $orders),
                     'tickets' => array_map(static fn($post) => BTL_Admin_Tickets::payloadForExternal($post), $tickets),
                     'reviews' => array_map([self::class, 'reviewPayload'], $reviews ?: []),
                 ];
